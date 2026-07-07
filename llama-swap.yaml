@@ -1,0 +1,50 @@
+# llama-swap runs the same tuned `llama-server` commands the cvm-pdf-processor scripts used
+# (start-proventos-server-gpu.sh / start-repair-server-gpu.sh), but on demand: it picks the
+# model by the request's "model" field and hot-swaps (unload one, load the other) so the single
+# GPU is shared. Flags below are copied verbatim from those scripts — only --port is ${PORT}
+# (llama-swap assigns it so it can proxy to the server it started).
+#
+# Run:  llama-swap --config llama-swap.yaml --listen 0.0.0.0:8080
+# llm-proxy's llama-cpp.base-url already points here (:8080).
+#
+# Embeddings (bge-m3) are NOT here: separate port/VRAM, always-on, no swap — own service.
+
+macros:
+  server: "/home/giovane/Documentos/Repo/llama.cpp/build/bin/llama-server"
+  models: "/home/giovane/Documentos/Repo/Models-llm"
+
+models:
+  # Dense 14B — default proventos/eventos extraction. cvm sends model="qwen3-14b".
+  # From start-proventos-server-gpu.sh (KV-cache turbo4/turbo3, ctx 70k, all layers on GPU).
+  qwen3-14b:
+    cmd: >
+      ${server}
+      -m ${models}/qwen3-14b.gguf
+      --no-mmap --mlock
+      --flash-attn on
+      -ngl 999
+      -c 70000
+      -t 4
+      --cache-type-k turbo4
+      --cache-type-v turbo3
+      --host 127.0.0.1
+      --port ${PORT}
+    # Unload after 10 min idle so the GPU frees up for the 35B/embeddings when extraction is quiet.
+    ttl: 600
+
+  # 35B MoE (experts offloaded to CPU) — repair pass for NEEDS_REVIEW docs.
+  # From start-repair-server-gpu.sh (--n-cpu-moe 18, --parallel 1, --threads-http 2).
+  qwen3-35b:
+    cmd: >
+      ${server}
+      --model ${models}/Qwen3.6-35B-A3B-Q4_K_M.gguf
+      --ctx-size 70000
+      --parallel 1
+      --threads-http 2
+      --n-gpu-layers 999
+      --n-cpu-moe 18
+      --cache-type-k turbo4
+      --cache-type-v turbo3
+      --host 127.0.0.1
+      --port ${PORT}
+    ttl: 600

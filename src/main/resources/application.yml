@@ -1,0 +1,27 @@
+server:
+  # 8091: cvm-pdf-processor usa 8085, llama-swap 8080, embeddings 8082, cvm-ingestor 8090.
+  port: 8091
+
+llm-proxy:
+  llama-cpp:
+    # Points at llama-swap (not raw llama-server): it hot-swaps qwen3-14b <-> qwen3-35b
+    # on demand based on the "model" field the proxy forwards, and manages VRAM.
+    base-url: ${LOCAL_LLAMA_URL:http://localhost:8080}
+    api-key: ${LOCAL_LLAMA_API_KEY:}
+    default-model: ${LOCAL_LLAMA_MODEL:qwen3-14b}
+  openrouter:
+    # base-url stops before /v1; the proxy appends /v1/chat/completions.
+    base-url: ${OPENROUTER_URL:https://openrouter.ai/api}
+    api-key: ${OPENROUTER_API_KEY:}
+    default-model: ${OPENROUTER_MODEL:openai/gpt-4o-mini}
+  embeddings:
+    # bge-m3 llama-server (sempre-on, fora do llama-swap); o cvm-pdf-processor gerencia
+    # o ciclo de vida dele via /embed/run.
+    base-url: ${EMBED_URL:http://localhost:8082}
+    api-key: ${EMBED_API_KEY:}
+    default-model: ${EMBED_MODEL:bge-m3}
+  routing:
+    # In "auto", a speed-hinted request under this many estimated tokens goes to OpenRouter.
+    speed-token-threshold: ${LLM_SPEED_TOKEN_THRESHOLD:8000}
+    # llama.cpp prefill on ~60k-token docs is slow; keep this above the client timeout.
+    read-timeout: ${LLM_READ_TIMEOUT:15m}

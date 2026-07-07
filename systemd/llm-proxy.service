@@ -1,0 +1,18 @@
+[Unit]
+Description=llm-proxy — OpenAI-compatible routing gateway (:8090)
+After=network.target llama-swap.service
+# Wants (not Requires): the proxy tolerates the backend being down (is_available() degrades),
+# so a llama-swap restart must not drag the proxy down with it.
+Wants=llama-swap.service
+
+[Service]
+WorkingDirectory=%h/Documentos/Repo/llm-proxy
+# Build first: mvn -q package -DskipTests  (produces target/llm-proxy-0.1.0.jar)
+ExecStart=/usr/bin/java -jar %h/Documentos/Repo/llm-proxy/target/llm-proxy-0.1.0.jar
+# Optional: OPENROUTER_API_KEY, LLM_SPEED_TOKEN_THRESHOLD, etc. The leading - makes it optional.
+EnvironmentFile=-%h/Documentos/Repo/llm-proxy/.env
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
