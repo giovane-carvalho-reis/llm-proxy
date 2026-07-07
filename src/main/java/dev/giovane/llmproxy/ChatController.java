@@ -75,6 +75,16 @@ class ChatController {
         return forward(up, "/v1/embeddings", mapper.writeValueAsString(json));
     }
 
+    /** EmbeddingClient.is_available() — relayed to llama-swap's /health. */
+    @GetMapping("/health")
+    ResponseEntity<String> health() {
+        return http.get()
+                .uri(props.embeddings().baseUrl() + "/health")
+                .retrieve()
+                .onStatus(s -> false, (req, res) -> { })
+                .toEntity(String.class);
+    }
+
     /** is_available() health check — proxied to llama.cpp (the default/local backend). */
     @GetMapping("/v1/models")
     ResponseEntity<String> models() {

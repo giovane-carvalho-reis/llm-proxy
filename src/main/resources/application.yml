@@ -15,9 +15,9 @@ llm-proxy:
     api-key: ${OPENROUTER_API_KEY:}
     default-model: ${OPENROUTER_MODEL:openai/gpt-4o-mini}
   embeddings:
-    # bge-m3 llama-server (sempre-on, fora do llama-swap); o cvm-pdf-processor gerencia
-    # o ciclo de vida dele via /embed/run.
-    base-url: ${EMBED_URL:http://localhost:8082}
+    # bge-m3 via llama-swap (grupo "embeddings", CPU/RAM): sobe sob demanda e convive
+    # com o modelo de chat carregado — ninguém mais gerencia processo de embed.
+    base-url: ${EMBED_URL:http://localhost:8080}
     api-key: ${EMBED_API_KEY:}
     default-model: ${EMBED_MODEL:bge-m3}
   routing:

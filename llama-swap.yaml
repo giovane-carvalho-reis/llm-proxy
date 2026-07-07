@@ -7,11 +7,24 @@
 # Run:  llama-swap --config llama-swap.yaml --listen 0.0.0.0:8080
 # llm-proxy's llama-cpp.base-url already points here (:8080).
 #
-# Embeddings (bge-m3) are NOT here: separate port/VRAM, always-on, no swap — own service.
+# Embeddings (bge-m3) live in their own non-swap group below: they coexist with whichever
+# chat model is loaded instead of swapping it out (small model, small VRAM footprint).
 
 macros:
   server: "/home/giovane/Documentos/Repo/llama.cpp/build/bin/llama-server"
   models: "/home/giovane/Documentos/Repo/Models-llm"
+
+# chat: 14b/35b swap between themselves; embeddings: bge-m3 loads alongside them
+# (exclusive: false on both, so neither group unloads the other).
+groups:
+  chat:
+    swap: true
+    exclusive: false
+    members: ["qwen3-14b", "qwen3-35b"]
+  embeddings:
+    swap: false
+    exclusive: false
+    members: ["bge-m3"]
 
 models:
   # Dense 14B — default proventos/eventos extraction. cvm sends model="qwen3-14b".
@@ -30,6 +43,25 @@ models:
       --host 127.0.0.1
       --port ${PORT}
     # Unload after 10 min idle so the GPU frees up for the 35B/embeddings when extraction is quiet.
+    ttl: 600
+
+  # Embeddings bge-m3 — CPU/RAM (-ngl 0), zero VRAM: nunca compete com os modelos de chat.
+  # Flags da variante CPU do antigo start-embed-server.sh; -c = 4 slots * 8192 (max do bge-m3).
+  bge-m3:
+    cmd: >
+      ${server}
+      -m ${models}/bge-m3-Q8_0.gguf
+      --embedding
+      --pooling mean
+      -ngl 0
+      -c 32768
+      -t 8
+      -b 512
+      -ub 512
+      -np 4
+      --threads-http 4
+      --host 127.0.0.1
+      --port ${PORT}
     ttl: 600
 
   # 35B MoE (experts offloaded to CPU) — repair pass for NEEDS_REVIEW docs.
