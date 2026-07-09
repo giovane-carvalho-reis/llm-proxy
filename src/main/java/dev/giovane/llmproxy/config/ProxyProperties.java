@@ -1,4 +1,4 @@
-package dev.giovane.llmproxy;
+package dev.giovane.llmproxy.config;
 
 import java.time.Duration;
 

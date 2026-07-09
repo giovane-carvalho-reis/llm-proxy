@@ -28,7 +28,7 @@ groups:
 
 models:
   # Dense 14B — default proventos/eventos extraction. cvm sends model="qwen3-14b".
-  # From start-proventos-server-gpu.sh (KV-cache turbo4/turbo3, ctx 70k, all layers on GPU).
+  # From start-proventos-server-gpu.sh (KV-cache q8_0/q8_0, ctx 70k, all layers on GPU).
   qwen3-14b:
     cmd: >
       ${server}
@@ -38,8 +38,8 @@ models:
       -ngl 999
       -c 70000
       -t 4
-      --cache-type-k turbo4
-      --cache-type-v turbo3
+      --cache-type-k q4_0
+      --cache-type-v q4_0
       --host 127.0.0.1
       --port ${PORT}
     # Unload after 10 min idle so the GPU frees up for the 35B/embeddings when extraction is quiet.
@@ -75,8 +75,8 @@ models:
       --threads-http 2
       --n-gpu-layers 999
       --n-cpu-moe 18
-      --cache-type-k turbo4
-      --cache-type-v turbo3
+      --cache-type-k q4_0
+      --cache-type-v q4_0
       --host 127.0.0.1
       --port ${PORT}
     ttl: 600

@@ -1,10 +1,10 @@
-package dev.giovane.llmproxy;
+package dev.giovane.llmproxy.router;
 
 /** Pure routing decision — no Spring, no IO, so it is trivially unit-testable. */
-final class Router {
+public final class Router {
 
-    static final String LLAMA = "llama-cpp";
-    static final String OPENROUTER = "openrouter";
+    public static final String LLAMA = "llama-cpp";
+    public static final String OPENROUTER = "openrouter";
 
     private Router() {
     }
@@ -16,7 +16,7 @@ final class Router {
      * asks for speed and is small enough goes to OpenRouter (fast cloud API);
      * everything else stays on local llama.cpp (no per-token cost, big context).
      */
-    static String resolve(String route, boolean speed, int estTokens, int speedThreshold) {
+    public static String resolve(String route, boolean speed, int estTokens, int speedThreshold) {
         if (LLAMA.equals(route) || OPENROUTER.equals(route)) {
             return route;
         }
