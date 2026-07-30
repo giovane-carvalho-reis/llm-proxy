@@ -5,10 +5,15 @@ import dev.giovane.llmproxy.router.Router;
 
 import org.springframework.boot.web.client.ClientHttpRequestFactories;
 import org.springframework.boot.web.client.ClientHttpRequestFactorySettings;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.StringHttpMessageConverter;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Set;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,6 +27,15 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 @Service
 public class ProxyService {
 
+    // RFC 7230 §6.1 hop-by-hop headers. The response body is fully buffered into a String
+    // (toEntity(String.class)) before Tomcat writes it, so Tomcat computes its own
+    // Transfer-Encoding/Content-Length — forwarding the upstream's Transfer-Encoding verbatim
+    // makes the servlet response carry two, which downstream HTTP clients (e.g. the BFF's
+    // RestClient) reject with "multiple Transfer-Encoding headers".
+    private static final Set<String> HOP_BY_HOP_HEADERS = Set.of(
+            "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+            "te", "trailer", "transfer-encoding", "upgrade");
+
     private final ProxyProperties props;
     private final ObjectMapper mapper;
     private final RestClient http;
@@ -33,8 +47,17 @@ public class ProxyService {
         // (the controller thread blocks, matching the client's own long timeout).
         var settings = ClientHttpRequestFactorySettings.DEFAULTS
                 .withReadTimeout(props.routing().readTimeout());
+        // StringHttpMessageConverter defaults to ISO-8859-1 when the upstream's
+        // Content-Type has no charset param (llama.cpp/llama-swap's "application/json"
+        // doesn't set one) — that silently mojibakes every non-ASCII char (UTF-8 bytes
+        // read as Latin-1) before it even reaches downstream consumers like the BFF.
+        var utf8StringConverter = new StringHttpMessageConverter(StandardCharsets.UTF_8);
         this.http = RestClient.builder()
                 .requestFactory(ClientHttpRequestFactories.get(settings))
+                .messageConverters(converters -> {
+                    converters.removeIf(c -> c instanceof StringHttpMessageConverter);
+                    converters.add(0, utf8StringConverter);
+                })
                 .build();
     }
 
@@ -61,20 +84,20 @@ public class ProxyService {
 
     /** EmbeddingClient.is_available() — relayed to llama-swap's /health. */
     public ResponseEntity<String> health() {
-        return http.get()
+        return stripHopByHopHeaders(http.get()
                 .uri(props.embeddings().baseUrl() + "/health")
                 .retrieve()
                 .onStatus(s -> false, (req, res) -> { })
-                .toEntity(String.class);
+                .toEntity(String.class));
     }
 
     /** is_available() health check — proxied to llama.cpp (the default/local backend). */
     public ResponseEntity<String> models() {
-        return http.get()
+        return stripHopByHopHeaders(http.get()
                 .uri(props.llamaCpp().baseUrl() + "/v1/models")
                 .retrieve()
                 .onStatus(s -> false, (req, res) -> { })
-                .toEntity(String.class);
+                .toEntity(String.class));
     }
 
     private static void fillDefaultModel(ObjectNode json, ProxyProperties.Upstream up) {
@@ -90,10 +113,29 @@ public class ProxyService {
         if (up.apiKey() != null && !up.apiKey().isBlank()) {
             spec = spec.header("Authorization", "Bearer " + up.apiKey());
         }
-        return spec.body(payload)
+        return stripHopByHopHeaders(spec.body(payload)
                 .retrieve()
                 .onStatus(s -> false, (req, res) -> { })   // relay upstream status/body instead of throwing
-                .toEntity(String.class);
+                .toEntity(String.class));
+    }
+
+    private static ResponseEntity<String> stripHopByHopHeaders(ResponseEntity<String> upstream) {
+        HttpHeaders headers = new HttpHeaders();
+        upstream.getHeaders().forEach((name, values) -> {
+            if (!HOP_BY_HOP_HEADERS.contains(name.toLowerCase())) {
+                headers.put(name, values);
+            }
+        });
+        // The body was already decoded as UTF-8 (see the RestClient's StringHttpMessageConverter
+        // above). But llama.cpp/llama-swap's Content-Type ("application/json") carries no charset
+        // param, and Spring MVC's own outbound StringHttpMessageConverter defaults to ISO-8859-1
+        // when none is declared — it would re-encode this same string wrong on the way out unless
+        // we pin the charset explicitly here.
+        MediaType contentType = headers.getContentType();
+        if (contentType != null && contentType.getCharset() == null) {
+            headers.setContentType(new MediaType(contentType, StandardCharsets.UTF_8));
+        }
+        return new ResponseEntity<>(upstream.getBody(), headers, upstream.getStatusCode());
     }
 
     /** Rough token estimate (~4 chars/token) over message contents — enough to pick a route. */

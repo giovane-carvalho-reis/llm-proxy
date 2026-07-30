@@ -11,8 +11,8 @@
 # chat model is loaded instead of swapping it out (small model, small VRAM footprint).
 
 macros:
-  server: "/home/giovane/Documentos/Repo/llama.cpp/build/bin/llama-server"
-  models: "/home/giovane/Documentos/Repo/Models-llm"
+  server: "/home/giovanehl2/Documentos/repo/llama-cpp-turboquant/build/bin/llama-server"
+  models: "/home/giovanehl2/Documentos/repo/Models-llm"
 
 # chat: 14b/35b swap between themselves; embeddings: bge-m3 loads alongside them
 # (exclusive: false on both, so neither group unloads the other).

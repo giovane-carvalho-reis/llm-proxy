@@ -3,9 +3,12 @@ Description=llama-swap — on-demand llama-server supervisor (qwen3-14b <-> qwen
 After=network.target
 
 [Service]
+# libllama-server-impl.so vive ao lado do binario (llama-cpp-turboquant/build/bin), fora do
+# ld.so padrao — sem isso llama-server falha com "error while loading shared libraries".
+Environment=LD_LIBRARY_PATH=%h/Documentos/repo/llama-cpp-turboquant/build/bin
 ExecStart=%h/Documentos/Repo/llama-swap/llama-swap \
-  --config %h/Documentos/Repo/llm-proxy/llama-swap.yaml \
-  --listen 127.0.0.1:8080
+  --config %h/Documentos/repo/llm-proxy/llama-swap.yaml \
+  --listen 0.0.0.0:8080
 Restart=on-failure
 RestartSec=3
 
