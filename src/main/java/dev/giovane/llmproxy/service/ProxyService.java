@@ -5,6 +5,7 @@ import dev.giovane.llmproxy.router.Router;
 
 import org.springframework.boot.web.client.ClientHttpRequestFactories;
 import org.springframework.boot.web.client.ClientHttpRequestFactorySettings;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -12,11 +13,13 @@ import org.springframework.http.converter.StringHttpMessageConverter;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Set;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 /**
@@ -39,10 +42,12 @@ public class ProxyService {
     private final ProxyProperties props;
     private final ObjectMapper mapper;
     private final RestClient http;
+    private final String guardrailPrompt;
 
     public ProxyService(ProxyProperties props, ObjectMapper mapper) {
         this.props = props;
         this.mapper = mapper;
+        this.guardrailPrompt = loadGuardrailPrompt();
         // llama.cpp prefill on big contexts is slow; give the upstream a long read timeout
         // (the controller thread blocks, matching the client's own long timeout).
         var settings = ClientHttpRequestFactorySettings.DEFAULTS
@@ -63,6 +68,12 @@ public class ProxyService {
 
     public ResponseEntity<String> completions(String body, String route, String priority) throws Exception {
         ObjectNode json = (ObjectNode) mapper.readTree(body);
+
+        // Before routing: the guardrail adds real tokens to the prompt, and the auto-route
+        // threshold is a token count. Estimating first would route on a size the upstream
+        // never sees.
+        mergeGuardrailSystemPrompt(json);
+
         boolean speed = "speed".equalsIgnoreCase(priority);
         String target = Router.resolve(route, speed, estimateTokens(json), props.routing().speedTokenThreshold());
 
@@ -98,6 +109,53 @@ public class ProxyService {
                 .retrieve()
                 .onStatus(s -> false, (req, res) -> { })
                 .toEntity(String.class));
+    }
+
+    /**
+     * Loads the guardrail text, dropping a leading HTML comment block. That block holds the
+     * maintenance note for whoever edits the file (see guardrails.md) — it is for humans, and
+     * would otherwise be prepended to every single request as dead tokens.
+     */
+    private static String loadGuardrailPrompt() {
+        try {
+            String raw = new String(new ClassPathResource("prompts/guardrails.md").getInputStream().readAllBytes(),
+                    StandardCharsets.UTF_8);
+            return raw.replaceFirst("(?s)^\\s*<!--.*?-->", "").strip();
+        } catch (IOException e) {
+            throw new IllegalStateException("prompts/guardrails.md ausente do classpath", e);
+        }
+    }
+
+    /**
+     * Applies the centralized security guardrail to chat completions. Prepended to the caller's
+     * own system message (if any) rather than replacing it — app-specific system prompts (scope,
+     * tool-call rules, output format) keep working on top. Prepending also keeps the guardrail a
+     * shared prefix across callers, which is what llama.cpp's prompt cache can actually reuse.
+     *
+     * <p>Skipped for schema-constrained requests ({@code response_format}): those are data
+     * extraction jobs, not conversations. The grammar makes a prose refusal impossible anyway,
+     * so the guardrail would only burn tokens on every document of a bulk pipeline while telling
+     * the model to "refuse off-topic questions" about a task that asks no question.
+     */
+    private void mergeGuardrailSystemPrompt(ObjectNode json) {
+        JsonNode messagesNode = json.get("messages");
+        if (!(messagesNode instanceof ArrayNode messages) || json.hasNonNull("response_format")) {
+            return;
+        }
+        JsonNode first = messages.isEmpty() ? null : messages.get(0);
+        // Only merge into a plain-text system message. A non-textual content (multimodal content
+        // blocks) would read back as "" and silently wipe the caller's prompt, so prepend a
+        // separate message instead.
+        if (first instanceof ObjectNode firstObj
+                && "system".equals(firstObj.path("role").asText())
+                && firstObj.path("content").isTextual()) {
+            firstObj.put("content", guardrailPrompt + "\n\n---\n\n" + firstObj.path("content").asText());
+        } else {
+            ObjectNode systemMessage = mapper.createObjectNode();
+            systemMessage.put("role", "system");
+            systemMessage.put("content", guardrailPrompt);
+            messages.insert(0, systemMessage);
+        }
     }
 
     private static void fillDefaultModel(ObjectNode json, ProxyProperties.Upstream up) {
