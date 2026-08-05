@@ -4,6 +4,7 @@ Antes de qualquer tarefa, leia:
 ../project-specs/llm-proxy/architecture.md
 ../project-specs/llm-proxy/glossary.md
 ../project-specs/llm-proxy/conventions.md
+@../project-specs/SPEC_IMPLEMENTATION_POLICY.md
 
 Ao concluir uma tarefa que mude estrutura, termos de domínio ou
 tome decisão técnica relevante, atualize os arquivos acima antes
