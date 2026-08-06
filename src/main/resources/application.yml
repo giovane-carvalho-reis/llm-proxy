@@ -25,3 +25,6 @@ llm-proxy:
     speed-token-threshold: ${LLM_SPEED_TOKEN_THRESHOLD:8000}
     # llama.cpp prefill on ~60k-token docs is slow; keep this above the client timeout.
     read-timeout: ${LLM_READ_TIMEOUT:15m}
+  # Shared secret required (X-Admin-Token header) to read/write /v1/config/**. Empty/absent
+  # means every request to that path is denied (fail-closed), never opened by omission.
+  admin-token: ${LLM_PROXY_ADMIN_TOKEN:}

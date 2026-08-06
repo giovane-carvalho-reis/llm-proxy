@@ -13,7 +13,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * OpenRouter is "https://openrouter.ai/api".
  */
 @ConfigurationProperties("llm-proxy")
-public record ProxyProperties(Upstream llamaCpp, Upstream openrouter, Upstream embeddings, Routing routing) {
+public record ProxyProperties(Upstream llamaCpp, Upstream openrouter, Upstream embeddings, Routing routing,
+        String adminToken) {
 
     public record Upstream(String baseUrl, String apiKey, String defaultModel) {
     }

@@ -40,12 +40,15 @@ public class ProxyService {
             "te", "trailer", "transfer-encoding", "upgrade");
 
     private final ProxyProperties props;
+    private final dev.giovane.llmproxy.config.LlmConfigState configState;
     private final ObjectMapper mapper;
     private final RestClient http;
     private final String guardrailPrompt;
 
-    public ProxyService(ProxyProperties props, ObjectMapper mapper) {
+    public ProxyService(ProxyProperties props, dev.giovane.llmproxy.config.LlmConfigState configState,
+            ObjectMapper mapper) {
         this.props = props;
+        this.configState = configState;
         this.mapper = mapper;
         this.guardrailPrompt = loadGuardrailPrompt();
         // llama.cpp prefill on big contexts is slow; give the upstream a long read timeout
@@ -77,7 +80,8 @@ public class ProxyService {
         boolean speed = "speed".equalsIgnoreCase(priority);
         String target = Router.resolve(route, speed, estimateTokens(json), props.routing().speedTokenThreshold());
 
-        ProxyProperties.Upstream up = Router.OPENROUTER.equals(target) ? props.openrouter() : props.llamaCpp();
+        ProxyProperties.Upstream up = configState.effective(target,
+                Router.OPENROUTER.equals(target) ? props.openrouter() : props.llamaCpp());
 
         // Fill in the backend's default model when the caller didn't pin one — the whole point
         // of "auto" is that the caller doesn't know which backend (and thus which model id) runs.
