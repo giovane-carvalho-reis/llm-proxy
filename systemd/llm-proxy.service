@@ -6,11 +6,11 @@ After=network.target llama-swap.service
 Wants=llama-swap.service
 
 [Service]
-WorkingDirectory=%h/Documentos/Repo/llm-proxy
+WorkingDirectory=%h/Documentos/repo/llm-proxy
 # Build first: mvn -q package -DskipTests  (produces target/llm-proxy-0.1.0.jar)
-ExecStart=/usr/bin/java -jar %h/Documentos/Repo/llm-proxy/target/llm-proxy-0.1.0.jar
+ExecStart=/usr/bin/java -jar %h/Documentos/repo/llm-proxy/target/llm-proxy-0.1.0.jar
 # Optional: OPENROUTER_API_KEY, LLM_SPEED_TOKEN_THRESHOLD, etc. The leading - makes it optional.
-EnvironmentFile=-%h/Documentos/Repo/llm-proxy/.env
+EnvironmentFile=-%h/Documentos/repo/llm-proxy/.env
 Restart=on-failure
 RestartSec=3
 

@@ -1,7 +1,13 @@
 ---
-name: feature-implementer
 description: Implementa funcionalidade a partir de uma spec escrita, seguindo convenções do projeto
-tools: Read, Write, Edit, Bash, Grep, Glob
+mode: subagent
+permission:
+    read: allow
+    edit: allow
+    edit: allow
+    bash: allow
+    grep: allow
+    glob: allow
 ---
 A stack detectada e o conteúdo das convenções aplicáveis (AGENTS.md/
 CLAUDE.md do repo, CODE_CONVENTIONS.md e o arquivo de convenção da stack)

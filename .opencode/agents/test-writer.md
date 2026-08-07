@@ -1,7 +1,13 @@
 ---
-name: test-writer
 description: Escreve testes para código novo ou alterado, seguindo padrões de teste do projeto
-tools: Read, Write, Edit, Bash, Grep, Glob
+mode: subagent
+permission:
+    read: allow
+    edit: allow
+    edit: allow
+    bash: allow
+    grep: allow
+    glob: allow
 ---
 A stack detectada e o contexto de convenções já vêm no prompt de
 invocação — não releia esses arquivos. Se o prompt não trouxer esse

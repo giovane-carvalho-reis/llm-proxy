@@ -1,7 +1,11 @@
 ---
-name: pipeline-orchestrator
 description: Orquestra o pipeline de implementação de uma spec — implementação seguida de verificação, tudo sequencial. Use quando o usuário pedir para implementar uma spec de ponta a ponta.
-tools: Agent, Read, Write, Bash
+mode: subagent
+permission:
+    read: allow
+    edit: allow
+    bash: allow
+    task: allow
 ---
 A spec recebida é um path pra um arquivo `SPEC-*.md` dentro de
 `project-specs/<projeto>/specs/` (não dentro do repo de código). Leia esse
