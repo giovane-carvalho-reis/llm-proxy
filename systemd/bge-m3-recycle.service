@@ -1,0 +1,11 @@
+[Unit]
+Description=Recicla o processo bge-m3-gpu do llama-swap pra resetar o RSS antes do vazamento acumular
+After=llama-swap.service
+Requires=llama-swap.service
+
+[Service]
+Type=oneshot
+# Vazamento conhecido em /embed (ver project-specs/llm-proxy/decisions.md) — descarregar e
+# recarregar o modelo reseta o RSS sem esperar o cgroup/kernel agir. Silencioso se o modelo não
+# estiver carregado (endpoint é idempotente).
+ExecStart=/usr/bin/curl -fsS -X POST http://localhost:8080/api/models/unload/bge-m3-gpu

@@ -1,0 +1,10 @@
+[Unit]
+Description=Roda bge-m3-recycle.service a cada 4min (janela observada até o OOM é de 5-9min)
+
+[Timer]
+OnActiveSec=4min
+OnUnitActiveSec=4min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

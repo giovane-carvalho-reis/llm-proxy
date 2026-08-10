@@ -97,6 +97,14 @@ public class ProxyService {
         return forward(up, "/v1/embeddings", mapper.writeValueAsString(json));
     }
 
+    /** Rerank passthrough — always the local bge-reranker-v2-m3 llama-server; no routing to decide. */
+    public ResponseEntity<String> rerank(String body) throws Exception {
+        ObjectNode json = (ObjectNode) mapper.readTree(body);
+        ProxyProperties.Upstream up = props.rerank();
+        fillDefaultModel(json, up);
+        return forward(up, "/v1/rerank", mapper.writeValueAsString(json));
+    }
+
     /** EmbeddingClient.is_available() — relayed to llama-swap's /health. */
     public ResponseEntity<String> health() {
         return stripHopByHopHeaders(http.get()

@@ -6,9 +6,26 @@ After=network.target
 # libllama-server-impl.so vive ao lado do binario (llama-cpp-turboquant/build/bin), fora do
 # ld.so padrao — sem isso llama-server falha com "error while loading shared libraries".
 Environment=LD_LIBRARY_PATH=%h/Documentos/repo/llama-cpp-turboquant/build/bin
+# E2 do diagnóstico de vazamento (bge-m3): reduziu MB/requisição vazados em ~17% (fragmentação
+# de arena do glibc é contribuinte menor, não a causa principal). Ver decisions.md.
+Environment=MALLOC_ARENA_MAX=2
+Environment=MALLOC_TRIM_THRESHOLD_=131072
+EnvironmentFile=%h/Documentos/repo/llm-proxy/.env
 ExecStart=%h/Documentos/Repo/llama-swap/llama-swap \
   --config %h/Documentos/repo/llm-proxy/llama-swap.yaml \
   --listen 0.0.0.0:8080
+# Teto de RAM do cgroup. Histórico (2026-08-09): 18G inicial -> reduzido pra 10G achando que o
+# unico consumidor relevante era o bge-m3 sozinho (na epoca ainda parecia vazamento). Depois de
+# achar a causa raiz real (prompt cache do llama.cpp, ver decisions.md) e medir o cenario de dois
+# modelos concorrentes (bge-m3-gpu + qwen3-35b, grupos non-exclusive), descoberto que a maior
+# parte do uso do cgroup e' `file` no memory.stat (page cache dos .gguf mmap'ados, ~11,6G so com
+# os dois carregados) -- memoria legitima/esperada, nao vazamento nem RSS de processo simples.
+# 10G/14G eram baixos demais (cgroup bateu 9,9/10 e depois 13,9/14 so com carga minima). Medido:
+# baseline real do resto do sistema (Docker+Claude Code+browser) varia entre ~8G e ~12G num host
+# de 30G -- 16G deixa margem mesmo no baseline mais alto observado, sem voltar ao 18G original
+# (que tinha margem zero contra esse mesmo baseline).
+MemoryMax=16G
+MemorySwapMax=0
 Restart=on-failure
 RestartSec=3
 

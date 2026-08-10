@@ -24,7 +24,7 @@ groups:
   embeddings:
     swap: false
     exclusive: false
-    members: ["bge-m3"]
+    members: ["bge-m3", "bge-m3-gpu", "bge-reranker-v2-m3"]
 
 models:
   # Dense 14B — default proventos/eventos extraction. cvm sends model="qwen3-14b".
@@ -66,12 +66,94 @@ models:
       --flash-attn on
       -np 4
       --threads-http 4
+      --cache-ram 0
+      --ctx-checkpoints 0
+      --host 127.0.0.1
+      --port ${PORT}
+    ttl: 600
+
+  # Embeddings bge-m3 — GPU (-ngl 999), -np 8 slots simultâneos. SPEC-embedding-gpu-profile:
+  # viável agora porque nenhuma etapa de extração via IA roda mais (chat models não sobem),
+  # então os 16GB de VRAM estão livres — antes só cabiam ~2GB livres com qwen3-35b carregado.
+  # -c 16384 = 2 slots * 8192 (teto de contexto do bge-m3), mesma regra do perfil CPU (32768/4).
+  # Ativar via env EMBED_MODEL=bge-m3-gpu no cvm-pdf-processor; bge-m3 (CPU) fica como fallback.
+  # -np era 8, depois 4: sob carga real (runs completos de 300k+ chunks) o processo não
+  # estabiliza — anon-rss+shmem-rss cresce continuamente até estourar o MemoryMax do cgroup
+  # (12G em 5min47s com -np 8; 18G em 4min55s com -np 4 — mesma taxa por slot, não é só
+  # startup). Medido ao vivo em 2026-08-09: ~24 MB de RSS vazados por requisição /v1/embeddings
+  # — bate com -ub 8192 * n_embd 1024 * 4 bytes (f32) = 33,5 MB, i.e. o vazamento parece ser uma
+  # alocação por-requisição dimensionada pelo ubatch físico e nunca liberada (não um buffer
+  # estático de startup, que explicaria a mesma taxa por tempo independente de -np: menos slots
+  # = menos throughput = mesmo vazamento por requisição = mesma taxa por tempo). -ub/-b reduzidos
+  # de 8192 para 2048 como experimento (E1 do diagnóstico) — se o MB/requisição cair ~4x,
+  # confirma a hipótese e já é mitigação real, não só paliativo. Ver
+  # project-specs/llm-proxy/decisions.md e llm-proxy/scripts/measure-embed-leak.sh.
+  # --no-mmap/--mlock removidas: com -ngl 999 os pesos já estão todos na GPU, essas flags só
+  # forçavam uma cópia adicional travada em RAM do host (~600MB-1GB) que o kernel nunca podia
+  # recuperar sob pressão de memória — ganho puro, independente do vazamento.
+  # CAUSA RAIZ ACHADA (2026-08-09, análise de código, não era bug): o "vazamento" era o prompt
+  # cache do llama.cpp (server-context.cpp/server-task.cpp), ligado por padrão com orçamento de
+  # 8192 MiB de RAM do host (common/common.h: cache_ram_mib=8192) — a cada requisição, todo slot
+  # ocioso é serializado pra esse cache (cache_idle_slots, default ligado) e só é despejado
+  # depois de estourar o limite. Pra chat multi-turno isso é útil (reaproveita prefixo); pra
+  # embeddings (cada chunk é um documento distinto, sem prefixo comum) é RAM jogada fora sem
+  # nenhum ganho. --cache-ram 0 desliga o cache por completo (confirmado no código: com 0 o
+  # cache nem é instanciado). Ver project-specs/llm-proxy/decisions.md.
+  # -c/-b/-ub revertidos pro valor original (2026-08-09) — a redução pra 2048 era mitigação de
+  # quando ainda parecia ser vazamento correlacionado a batch; com --cache-ram 0 (causa raiz
+  # real) confirmado sem crescimento de RSS, não há motivo pra manter a cobertura reduzida.
+  bge-m3-gpu:
+    cmd: >
+      ${server}
+      -m ${models}/bge-m3-Q8_0.gguf
+      --embedding
+      --pooling mean
+      -ngl 999
+      -c 16384
+      -b 8192
+      -ub 8192
+      --flash-attn on
+      -np 2
+      --threads-http 2
+      --cache-ram 0
+      --ctx-checkpoints 0
+      --host 127.0.0.1
+      --port ${PORT}
+    ttl: 600
+
+  # Reranker cross-encoder — companheiro do bge-m3, mesma família/quantização (Q8_0, ~606MB).
+  # Estágio 2 do retrieval do LazyInvest (SPEC/decisions.md: coseno do bge-m3 fica comprimido
+  # nesse domínio — 0,67 irrelevante vs 0,80 relevante, ~0,08 de distância — e não discrimina
+  # nada; o reranker processa query+chunk juntos e devolve score bem espalhado). Confirmado
+  # manualmente em 2026-08-10: candidatos reais entre -1,14 e -4,20, controle irrelevante em
+  # -9,54/-11,04 — gap de 5,3 pontos entre o pior candidato real e o melhor controle.
+  # --pooling rank + --reranking habilitam o endpoint /v1/rerank. -ngl 999: GPU tem folga
+  # (14,8GB livres de 16,3GB mesmo com bge-m3-gpu carregado — modelo é pequeno). Mesmas
+  # mitigações de RAM do bge-m3-gpu (--cache-ram 0, --ctx-checkpoints 0) — mesma causa raiz
+  # (prompt cache) se aplicaria aqui, mas sem prefixo comum entre requests de rerank.
+  bge-reranker-v2-m3:
+    cmd: >
+      ${server}
+      -m ${models}/bge-reranker-v2-m3-Q8_0.gguf
+      --reranking
+      --pooling rank
+      -ngl 999
+      -c 8192
+      -np 2
+      --threads-http 2
+      --cache-ram 0
+      --ctx-checkpoints 0
       --host 127.0.0.1
       --port ${PORT}
     ttl: 600
 
   # 35B MoE (experts offloaded to CPU) — repair pass for NEEDS_REVIEW docs.
   # From start-repair-server-gpu.sh (--n-cpu-moe 18, --parallel 1, --threads-http 2).
+  # --cache-ram 2048 (2026-08-09): rodando junto com bge-m3-gpu (embeddings, grupo não
+  # exclusive), o cgroup do llama-swap.service já bateu 9,9G/10G só com os pesos MoE
+  # offloaded pra RAM + o prompt cache default de 8192MiB sem teto. Cache continua ligado
+  # (multi-turno se beneficia aqui, diferente de embeddings) mas com orçamento reduzido pra
+  # não deixar esse modelo sozinho consumir o cap inteiro. Ver decisions.md.
   qwen3-35b:
     cmd: >
       ${server}
@@ -81,6 +163,7 @@ models:
       --threads-http 2
       --n-gpu-layers 999
       --n-cpu-moe 18
+      --cache-ram 2048
       --cache-type-k q4_0
       --cache-type-v q4_0
       --host 127.0.0.1

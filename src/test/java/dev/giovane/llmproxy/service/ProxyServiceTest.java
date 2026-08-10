@@ -68,7 +68,7 @@ class ProxyServiceTest {
 
     private ProxyProperties props(String envApiKey, String envModel) {
         ProxyProperties.Upstream up = new ProxyProperties.Upstream(baseUrl(), envApiKey, envModel);
-        return new ProxyProperties(up, up, up, new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "");
+        return new ProxyProperties(up, up, up, up, new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "");
     }
 
     @Test

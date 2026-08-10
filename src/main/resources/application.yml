@@ -20,6 +20,13 @@ llm-proxy:
     base-url: ${EMBED_URL:http://localhost:8080}
     api-key: ${EMBED_API_KEY:}
     default-model: ${EMBED_MODEL:bge-m3}
+  rerank:
+    # bge-reranker-v2-m3 via llama-swap (mesmo grupo "embeddings", GPU) — estágio 2 do
+    # retrieval do LazyInvest. Mesma base-url do llama-cpp (:8080); llama-swap roteia pelo
+    # campo "model" do corpo, igual chat/embeddings.
+    base-url: ${RERANK_URL:http://localhost:8080}
+    api-key: ${RERANK_API_KEY:}
+    default-model: ${RERANK_MODEL:bge-reranker-v2-m3}
   routing:
     # In "auto", a speed-hinted request under this many estimated tokens goes to OpenRouter.
     speed-token-threshold: ${LLM_SPEED_TOKEN_THRESHOLD:8000}

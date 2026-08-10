@@ -38,6 +38,11 @@ public class ChatController {
         return service.embeddings(body);
     }
 
+    @PostMapping("/v1/rerank")
+    ResponseEntity<String> rerank(@RequestBody String body) throws Exception {
+        return service.rerank(body);
+    }
+
     @GetMapping("/health")
     ResponseEntity<String> health() {
         return service.health();

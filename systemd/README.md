@@ -6,6 +6,7 @@ Two long-running services:
 |--------------------|------|------------------------------------------------------------------------|
 | `llama-swap`       | 8080 | On-demand `llama-server` supervisor (qwen3-14b ↔ qwen3-35b + bge-m3)  |
 | `llm-proxy`        | 8091 | OpenAI-compat gateway; chat (llama-cpp vs openrouter) + embeddings     |
+| `bge-m3-recycle`   | —    | Timer (4min) que recicla o `bge-m3-gpu` pra conter um vazamento de RAM conhecido — ver `project-specs/llm-proxy/decisions.md` |
 
 Chain: `cvm / LazyInvest → llm-proxy(:8091) → llama-swap(:8080) → llama-server`.
 Embeddings (bge-m3) são um modelo do llama-swap em grupo próprio (CPU, sem swap).
@@ -21,6 +22,7 @@ mkdir -p ~/.config/systemd/user
 cp systemd/*.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now llama-swap llm-proxy
+systemctl --user enable --now bge-m3-recycle.timer
 
 # start on boot without an active login session
 loginctl enable-linger "$USER"
