@@ -166,6 +166,10 @@ models:
       --cache-ram 2048
       --cache-type-k q4_0
       --cache-type-v q4_0
+      --flash-attn on
       --host 127.0.0.1
       --port ${PORT}
-    ttl: 600
+    # ttl 3600 (era 600): voltar ao chat depois de uma pausa de 10min pagava o load dos
+    # pesos (~21GB) na primeira pergunta (~30-90s além da geração). Embeddings coexistem
+    # (exclusive: false); a troca com o 14B de extração continua normal.
+    ttl: 3600
