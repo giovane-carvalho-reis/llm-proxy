@@ -20,7 +20,7 @@ groups:
   chat:
     swap: true
     exclusive: false
-    members: ["qwen3-14b", "qwen3-35b"]
+    members: ["qwen3-14b", "qwen3-35b", "qwen3-27b"]
   embeddings:
     swap: false
     exclusive: false
@@ -29,15 +29,18 @@ groups:
 models:
   # Dense 14B — default proventos/eventos extraction. cvm sends model="qwen3-14b".
   # From start-proventos-server-gpu.sh (KV-cache q8_0/q8_0, ctx 70k, all layers on GPU).
+  # --no-mmap/--mlock removidas (2026-08-14): mesma razão do bge-m3-gpu (linhas abaixo) —
+  # com -ngl 999 os pesos já estão todos na GPU, essas flags só forçavam uma cópia adicional
+  # travada em RAM do host (~600MB-1GB) que o kernel nunca podia recuperar sob pressão de
+  # memória. -t 4 -> 8: 8 cores físicos disponíveis (Ryzen 7 5700X), sem motivo pra travar em 4.
   qwen3-14b:
     cmd: >
       ${server}
       -m ${models}/qwen3-14b.gguf
-      --no-mmap --mlock
       --flash-attn on
       -ngl 999
       -c 70000
-      -t 4
+      -t 8
       --cache-type-k q4_0
       --cache-type-v q4_0
       --host 127.0.0.1
@@ -172,4 +175,39 @@ models:
     # ttl 3600 (era 600): voltar ao chat depois de uma pausa de 10min pagava o load dos
     # pesos (~21GB) na primeira pergunta (~30-90s além da geração). Embeddings coexistem
     # (exclusive: false); a troca com o 14B de extração continua normal.
+    ttl: 3600
+
+  # Dense 27B (2026-08-14) — opção de chat, NÃO é o default (LOCAL_LLAMA_MODEL continua
+  # qwen3-14b; fastModel/analysisModel do LazyInvest continuam qwen3-35b). Diferente do
+  # 35B (MoE, ~3B ativos por token), este é denso: os 15,66 GiB de pesos Q4_K_M já ocupam
+  # 98% dos 15,92 GiB de VRAM da 5070 Ti sozinhos, e todo layer offloaded pra CPU processa
+  # todo token (sem o escape --n-cpu-moe). -ngl 46/-c 32768 medidos com llama-fit-params
+  # (build TurboQuant) com bge-m3-gpu+reranker já carregados (2,4GB) — 19 dos 65 layers
+  # ficam na CPU. Testado --cache-type-v turbo2 (TurboQuant): ngl idêntico ao q4_0 puro,
+  # porque head_count_kv=4 (GQA) já deixa o cache V pequeno — sem ganho de VRAM, então
+  # fica de fora (turbo nunca deve ir no K, e no V aqui não compra nada). Medido ao vivo:
+  # ~6,6 tok/s de geração baseline (offload parcial) — mais lento que o 35B MoE.
+  # --spec-type draft-mtp: este GGUF carrega um head MTP nativo (tensores blk.64.nextn.*,
+  # estilo DeepSeek-V3), auto-especulação sem modelo draft separado. Medido ao vivo
+  # (2026-08-14): 6,6 -> 14,3 tok/s (2,16x), aceitação 62,5% (30/48 tokens), custo de só
+  # +258MiB VRAM (log: "estimated memory usage of MTP context"). Ganho grande o bastante
+  # pra já entrar habilitado por padrão aqui, diferente do turbo KV (que não deu ganho
+  # nenhum, ver medição acima). Alternativa se ainda não bastar: requantizar pra TQ3_1S
+  # (4,00 bpw, ~12,6GB, cabe 100% na GPU sem precisar de offload) — ver decisions.md.
+  qwen3-27b:
+    cmd: >
+      ${server}
+      -m ${models}/Qwen3.8-27B-Q4_K_M.gguf
+      --ctx-size 32768
+      --parallel 1
+      --threads-http 2
+      -t 8
+      --n-gpu-layers 46
+      --cache-ram 2048
+      --cache-type-k q4_0
+      --cache-type-v q4_0
+      --flash-attn on
+      --spec-type draft-mtp
+      --host 127.0.0.1
+      --port ${PORT}
     ttl: 3600
