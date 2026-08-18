@@ -96,6 +96,8 @@ public class ProxyService {
         ResponseEntity<String> response = forward(up, "/v1/chat/completions", mapper.writeValueAsString(json));
         if (Router.OPENROUTER.equals(target)) {
             logOpenRouterProvider(json, response);
+        } else {
+            logDraftAcceptance(json, response);
         }
         return response;
     }
@@ -244,6 +246,30 @@ public class ProxyService {
             boolean hasToolCalls = resp.path("choices").path(0).path("message").has("tool_calls");
             log.info("openrouter model={} provider={} toolCalls={}",
                     request.path("model").asText("?"), resp.path("provider").asText("?"), hasToolCalls);
+        } catch (IOException e) {
+            // observabilidade best-effort
+        }
+    }
+
+    /**
+     * llama.cpp's --spec-type draft-mtp puts draft_n/draft_n_accepted inside "timings", but
+     * langchain4j-open-ai (the only caller) parses only the OpenAI-standard response fields and
+     * silently drops "timings" — so the acceptance rate never reaches any app-level log unless we
+     * read it here, before it's discarded. Best-effort: never fails the response over a log.
+     */
+    private void logDraftAcceptance(ObjectNode request, ResponseEntity<String> response) {
+        if (response.getBody() == null) {
+            return;
+        }
+        try {
+            JsonNode timings = mapper.readTree(response.getBody()).path("timings");
+            int draftN = timings.path("draft_n").asInt(0);
+            if (draftN <= 0) {
+                return;
+            }
+            int accepted = timings.path("draft_n_accepted").asInt(0);
+            log.info("mtp model={} draft={}/{} accepted={}%",
+                    request.path("model").asText("?"), accepted, draftN, Math.round(100.0 * accepted / draftN));
         } catch (IOException e) {
             // observabilidade best-effort
         }

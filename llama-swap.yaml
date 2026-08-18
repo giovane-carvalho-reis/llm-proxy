@@ -201,6 +201,12 @@ models:
   # (4,00 bpw, ~12,6GB, cabe 100% na GPU sem precisar de offload) — ver decisions.md.
   # --reasoning off: mesmo motivo do 3.6-35b acima. Medido em 2026-08-15 com /no_think:
   # 127 tokens de saída em 19,5s; com --reasoning off, 43 tokens em 6,0s e a mesma resposta.
+  # --spec-draft-n-max 2: profundidade de draft do MTP (default 3). --spec-draft-p-min é 0.0
+  # por padrão, então o llama.cpp nunca corta cedo por baixa confiança — sempre especula até o
+  # teto de n_max. Medido ao vivo (2026-08-17), 5 prompts, timings.draft_n/draft_n_accepted:
+  # n_max=1: ~75% aceitação, ~10,3 tok/s | n_max=2: ~61% aceitação, ~10,7 tok/s (melhor) |
+  # n_max=3 (default): ~50%, ~10,5 tok/s | n_max=4: ~40%, ~9,0 tok/s (pior — draft raso rende
+  # mais que draft fundo aqui). Amostra pequena, reavaliar se a carga de uso mudar muito.
   qwen3.8-27b:
     cmd: >
       ${server}
@@ -216,6 +222,7 @@ models:
       --cache-type-v q4_0
       --flash-attn on
       --spec-type draft-mtp
+      --spec-draft-n-max 2
       --host 127.0.0.1
       --port ${PORT}
     ttl: 3600

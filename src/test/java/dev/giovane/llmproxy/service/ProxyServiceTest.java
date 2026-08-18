@@ -121,6 +121,25 @@ class ProxyServiceTest {
     }
 
     @Test
+    void completionsPassesThroughDraftTimingsUnmodified() throws Exception {
+        upstream.removeContext("/v1/chat/completions");
+        String upstreamBody = "{\"choices\":[],\"timings\":{\"draft_n\":48,\"draft_n_accepted\":30}}";
+        upstream.createContext("/v1/chat/completions", exchange -> {
+            byte[] response = upstreamBody.getBytes();
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        ProxyProperties props = props("env-key", "env-model");
+        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+
+        var response = service.completions("{\"messages\":[]}", "local", null);
+
+        assertThat(response.getBody()).isEqualTo(upstreamBody);
+    }
+
+    @Test
     void chatModelsFiltersOutEmbeddingAndRerankModels() throws Exception {
         ProxyProperties props = props("env-key", "env-model");
         ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
