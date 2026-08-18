@@ -52,4 +52,10 @@ public class ChatController {
     ResponseEntity<String> models() {
         return service.models();
     }
+
+    /** Same as /v1/models, filtered to chat-capable local models (excludes embeddings/rerank). */
+    @GetMapping("/v1/models/chat")
+    ResponseEntity<String> chatModels() {
+        return service.chatModels();
+    }
 }

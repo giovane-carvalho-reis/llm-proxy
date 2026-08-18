@@ -1,6 +1,7 @@
 package dev.giovane.llmproxy.config;
 
 import java.time.Duration;
+import java.util.List;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -14,7 +15,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties("llm-proxy")
 public record ProxyProperties(Upstream llamaCpp, Upstream openrouter, Upstream embeddings, Upstream rerank,
-        Routing routing, String adminToken) {
+        Routing routing, String adminToken, List<String> localChatModels) {
 
     public record Upstream(String baseUrl, String apiKey, String defaultModel) {
     }

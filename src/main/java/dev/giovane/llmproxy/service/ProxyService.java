@@ -3,6 +3,8 @@ package dev.giovane.llmproxy.service;
 import dev.giovane.llmproxy.config.ProxyProperties;
 import dev.giovane.llmproxy.router.Router;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.web.client.ClientHttpRequestFactories;
 import org.springframework.boot.web.client.ClientHttpRequestFactorySettings;
 import org.springframework.core.io.ClassPathResource;
@@ -29,6 +31,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
  */
 @Service
 public class ProxyService {
+
+    private static final Logger log = LoggerFactory.getLogger(ProxyService.class);
 
     // RFC 7230 §6.1 hop-by-hop headers. The response body is fully buffered into a String
     // (toEntity(String.class)) before Tomcat writes it, so Tomcat computes its own
@@ -86,7 +90,14 @@ public class ProxyService {
         // Fill in the backend's default model when the caller didn't pin one — the whole point
         // of "auto" is that the caller doesn't know which backend (and thus which model id) runs.
         fillDefaultModel(json, up);
-        return forward(up, "/v1/chat/completions", mapper.writeValueAsString(json));
+        if (Router.OPENROUTER.equals(target)) {
+            pinOpenRouterProvider(json);
+        }
+        ResponseEntity<String> response = forward(up, "/v1/chat/completions", mapper.writeValueAsString(json));
+        if (Router.OPENROUTER.equals(target)) {
+            logOpenRouterProvider(json, response);
+        }
+        return response;
     }
 
     /** Embeddings passthrough — always the local bge-m3 llama-server; no routing to decide. */
@@ -121,6 +132,42 @@ public class ProxyService {
                 .retrieve()
                 .onStatus(s -> false, (req, res) -> { })
                 .toEntity(String.class));
+    }
+
+    /**
+     * Same upstream as {@link #models()}, filtered to {@code llm-proxy.local-chat-models} —
+     * llama-swap's /v1/models lists embeddings/rerank models too and carries no group field
+     * to tell them apart, so the chat/embeddings split can only come from our own config.
+     */
+    public ResponseEntity<String> chatModels() {
+        ResponseEntity<String> upstream = models();
+        if (!upstream.getStatusCode().is2xxSuccessful() || upstream.getBody() == null) {
+            return upstream;
+        }
+        try {
+            ObjectNode json = (ObjectNode) mapper.readTree(upstream.getBody());
+            JsonNode data = json.get("data");
+            if (data instanceof ArrayNode array) {
+                Set<String> allowed = Set.copyOf(props.localChatModels());
+                ArrayNode filtered = mapper.createArrayNode();
+                array.forEach(model -> {
+                    if (allowed.contains(model.path("id").asText())) {
+                        filtered.add(model);
+                    }
+                });
+                json.set("data", filtered);
+            }
+            // Content-Length in upstream.getHeaders() was computed for the unfiltered body —
+            // reusing it here (now shorter) would make the client wait for bytes that never
+            // arrive, hanging until its read timeout. Only Content-Type carries over; Spring
+            // MVC computes the correct Content-Length itself from the actual response body.
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(upstream.getHeaders().getContentType());
+            return ResponseEntity.status(upstream.getStatusCode()).headers(headers)
+                    .body(mapper.writeValueAsString(json));
+        } catch (IOException e) {
+            return upstream;
+        }
     }
 
     /**
@@ -167,6 +214,38 @@ public class ProxyService {
             systemMessage.put("role", "system");
             systemMessage.put("content", guardrailPrompt);
             messages.insert(0, systemMessage);
+        }
+    }
+
+    /**
+     * Sem isto o OpenRouter roteia livremente o mesmo model id entre backends de
+     * inferência diferentes por chamada — fidelidade de tool-calling varia por backend
+     * mesmo com temperature=0.0 (DEBT-TOOLCALL-001, project-specs/lazyinvest/decisions.md).
+     * require_parameters filtra candidatos que não suportam os parâmetros pedidos (ex.:
+     * tools); allow_fallbacks evita cair silenciosamente num backend alternativo em vez de
+     * errar.
+     */
+    private void pinOpenRouterProvider(ObjectNode json) {
+        if (!json.has("provider")) {
+            ObjectNode provider = mapper.createObjectNode();
+            provider.put("allow_fallbacks", false);
+            provider.put("require_parameters", true);
+            json.set("provider", provider);
+        }
+    }
+
+    /** Best-effort: nunca falha a resposta ao cliente por causa de um log. */
+    private void logOpenRouterProvider(ObjectNode request, ResponseEntity<String> response) {
+        if (response.getBody() == null) {
+            return;
+        }
+        try {
+            JsonNode resp = mapper.readTree(response.getBody());
+            boolean hasToolCalls = resp.path("choices").path(0).path("message").has("tool_calls");
+            log.info("openrouter model={} provider={} toolCalls={}",
+                    request.path("model").asText("?"), resp.path("provider").asText("?"), hasToolCalls);
+        } catch (IOException e) {
+            // observabilidade best-effort
         }
     }
 

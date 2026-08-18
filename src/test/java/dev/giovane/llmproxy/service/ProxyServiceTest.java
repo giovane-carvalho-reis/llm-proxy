@@ -54,6 +54,14 @@ class ProxyServiceTest {
             exchange.getResponseBody().write(response);
             exchange.close();
         });
+        upstream.createContext("/v1/models", exchange -> {
+            byte[] response = ("{\"data\":[{\"id\":\"bge-m3\"},{\"id\":\"qwen3-14b\"},"
+                    + "{\"id\":\"bge-reranker-v2-m3\"},{\"id\":\"qwen3.6-35b\"}]}").getBytes();
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
         upstream.start();
     }
 
@@ -68,7 +76,8 @@ class ProxyServiceTest {
 
     private ProxyProperties props(String envApiKey, String envModel) {
         ProxyProperties.Upstream up = new ProxyProperties.Upstream(baseUrl(), envApiKey, envModel);
-        return new ProxyProperties(up, up, up, up, new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "");
+        return new ProxyProperties(up, up, up, up, new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "",
+                java.util.List.of("qwen3-14b", "qwen3.6-35b", "qwen3.8-27b"));
     }
 
     @Test
@@ -109,5 +118,18 @@ class ProxyServiceTest {
 
         assertThat(lastAuthHeader.get()).isEqualTo("Bearer env-key");
         assertThat(lastModel.get()).isEqualTo("env-embed-model");
+    }
+
+    @Test
+    void chatModelsFiltersOutEmbeddingAndRerankModels() throws Exception {
+        ProxyProperties props = props("env-key", "env-model");
+        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+
+        var response = service.chatModels();
+
+        var ids = mapper.readTree(response.getBody()).get("data");
+        assertThat(ids).hasSize(2);
+        assertThat(ids).extracting(n -> n.get("id").asText())
+                .containsExactlyInAnyOrder("qwen3-14b", "qwen3.6-35b");
     }
 }

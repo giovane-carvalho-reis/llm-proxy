@@ -20,7 +20,7 @@ groups:
   chat:
     swap: true
     exclusive: false
-    members: ["qwen3-14b", "qwen3-35b", "qwen3-27b"]
+    members: ["qwen3-14b", "qwen3.6-35b", "qwen3.8-27b", "qwen3.5-9b"]
   embeddings:
     swap: false
     exclusive: false
@@ -77,7 +77,7 @@ models:
 
   # Embeddings bge-m3 — GPU (-ngl 999), -np 8 slots simultâneos. SPEC-embedding-gpu-profile:
   # viável agora porque nenhuma etapa de extração via IA roda mais (chat models não sobem),
-  # então os 16GB de VRAM estão livres — antes só cabiam ~2GB livres com qwen3-35b carregado.
+  # então os 16GB de VRAM estão livres — antes só cabiam ~2GB livres com qwen3.6-35b carregado.
   # -c 16384 = 2 slots * 8192 (teto de contexto do bge-m3), mesma regra do perfil CPU (32768/4).
   # Ativar via env EMBED_MODEL=bge-m3-gpu no cvm-pdf-processor; bge-m3 (CPU) fica como fallback.
   # -np era 8, depois 4: sob carga real (runs completos de 300k+ chunks) o processo não
@@ -157,10 +157,15 @@ models:
   # offloaded pra RAM + o prompt cache default de 8192MiB sem teto. Cache continua ligado
   # (multi-turno se beneficia aqui, diferente de embeddings) mas com orçamento reduzido pra
   # não deixar esse modelo sozinho consumir o cap inteiro. Ver decisions.md.
-  qwen3-35b:
+  # --reasoning off: o prefixo /no_think do LazyInvest (agent.no-think-prefix) só é entendido
+  # pelo template do Qwen3 original (14b). Medido em 2026-08-15: o 3.6-35b ignorou o comando,
+  # gastou 395 tokens de thinking e ainda o citou dentro do raciocínio. Cliente que quiser
+  # thinking de volta manda chat_template_kwargs.enable_thinking=true na requisição.
+  qwen3.6-35b:
     cmd: >
       ${server}
       --model ${models}/Qwen3.6-35B-A3B-Q4_K_M.gguf
+      --reasoning off
       --ctx-size 70000
       --parallel 1
       --threads-http 2
@@ -178,7 +183,7 @@ models:
     ttl: 3600
 
   # Dense 27B (2026-08-14) — opção de chat, NÃO é o default (LOCAL_LLAMA_MODEL continua
-  # qwen3-14b; fastModel/analysisModel do LazyInvest continuam qwen3-35b). Diferente do
+  # qwen3-14b; fastModel/analysisModel do LazyInvest continuam qwen3.6-35b). Diferente do
   # 35B (MoE, ~3B ativos por token), este é denso: os 15,66 GiB de pesos Q4_K_M já ocupam
   # 98% dos 15,92 GiB de VRAM da 5070 Ti sozinhos, e todo layer offloaded pra CPU processa
   # todo token (sem o escape --n-cpu-moe). -ngl 46/-c 32768 medidos com llama-fit-params
@@ -194,10 +199,13 @@ models:
   # pra já entrar habilitado por padrão aqui, diferente do turbo KV (que não deu ganho
   # nenhum, ver medição acima). Alternativa se ainda não bastar: requantizar pra TQ3_1S
   # (4,00 bpw, ~12,6GB, cabe 100% na GPU sem precisar de offload) — ver decisions.md.
-  qwen3-27b:
+  # --reasoning off: mesmo motivo do 3.6-35b acima. Medido em 2026-08-15 com /no_think:
+  # 127 tokens de saída em 19,5s; com --reasoning off, 43 tokens em 6,0s e a mesma resposta.
+  qwen3.8-27b:
     cmd: >
       ${server}
       -m ${models}/Qwen3.8-27B-Q4_K_M.gguf
+      --reasoning off
       --ctx-size 32768
       --parallel 1
       --threads-http 2
@@ -208,6 +216,32 @@ models:
       --cache-type-v q4_0
       --flash-attn on
       --spec-type draft-mtp
+      --host 127.0.0.1
+      --port ${PORT}
+    ttl: 3600
+
+  # Dense 9B (2026-08-15) — opção de chat adicional, NÃO é o default
+  # (LOCAL_LLAMA_MODEL continua qwen3-14b; fastModel/analysisModel do
+  # LazyInvest continuam intocados). -ngl 999 confirmado ao vivo: cabe
+  # inteiro na GPU sozinho (~6,5GB de 16,3GB usados, sem offload parcial).
+  # --reasoning off: mesmo motivo do 3.6-35b/3.8-27b — medido ao vivo que
+  # o template ignora /no_think (queima tokens de thinking mesmo assim);
+  # chat_template_kwargs.enable_thinking=false funciona pra quem quiser
+  # thinking de volta. Sem --spec-type draft-mtp: `llama-gguf` não achou
+  # tensores nextn/MTP neste GGUF (diferente do 3.8-27b).
+  qwen3.5-9b:
+    cmd: >
+      ${server}
+      -m ${models}/Qwen3.5-9B-Q4_K_M.gguf
+      --reasoning off
+      --ctx-size 32768
+      --parallel 1
+      --threads-http 2
+      -t 8
+      --n-gpu-layers 999
+      --cache-type-k q4_0
+      --cache-type-v q4_0
+      --flash-attn on
       --host 127.0.0.1
       --port ${PORT}
     ttl: 3600

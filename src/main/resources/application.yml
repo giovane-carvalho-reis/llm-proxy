@@ -4,7 +4,7 @@ server:
 
 llm-proxy:
   llama-cpp:
-    # Points at llama-swap (not raw llama-server): it hot-swaps qwen3-14b <-> qwen3-35b
+    # Points at llama-swap (not raw llama-server): it hot-swaps qwen3-14b <-> qwen3.6-35b
     # on demand based on the "model" field the proxy forwards, and manages VRAM.
     base-url: ${LOCAL_LLAMA_URL:http://localhost:8080}
     api-key: ${LOCAL_LLAMA_API_KEY:}
@@ -35,3 +35,6 @@ llm-proxy:
   # Shared secret required (X-Admin-Token header) to read/write /v1/config/**. Empty/absent
   # means every request to that path is denied (fail-closed), never opened by omission.
   admin-token: ${LLM_PROXY_ADMIN_TOKEN:}
+  # Chat-capable ids from llama-swap.yaml's "chat" group (see /v1/models/chat) — llama-swap's
+  # own /v1/models doesn't expose group membership, so this is the only source of truth.
+  local-chat-models: ${LOCAL_CHAT_MODELS:qwen3-14b,qwen3.6-35b,qwen3.8-27b,qwen3.5-9b}

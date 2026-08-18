@@ -4,7 +4,7 @@ Two long-running services:
 
 | Service            | Port | What                                                                   |
 |--------------------|------|------------------------------------------------------------------------|
-| `llama-swap`       | 8080 | On-demand `llama-server` supervisor (qwen3-14b ↔ qwen3-35b + bge-m3)  |
+| `llama-swap`       | 8080 | On-demand `llama-server` supervisor (qwen3-14b ↔ qwen3.6-35b + bge-m3)  |
 | `llm-proxy`        | 8091 | OpenAI-compat gateway; chat (llama-cpp vs openrouter) + embeddings     |
 | `bge-m3-recycle`   | —    | Timer (4min) que recicla o `bge-m3-gpu` pra conter um vazamento de RAM conhecido — ver `project-specs/llm-proxy/decisions.md` |
 
