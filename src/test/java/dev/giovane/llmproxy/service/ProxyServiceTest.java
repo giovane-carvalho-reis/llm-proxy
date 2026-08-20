@@ -27,6 +27,7 @@ class ProxyServiceTest {
     private HttpServer upstream;
     private final AtomicReference<String> lastAuthHeader = new AtomicReference<>();
     private final AtomicReference<String> lastModel = new AtomicReference<>();
+    private final AtomicReference<com.fasterxml.jackson.databind.JsonNode> lastMessages = new AtomicReference<>();
     private final AtomicReference<String> lastPath = new AtomicReference<>();
     private final AtomicReference<String> lastTemperature = new AtomicReference<>();
     private final ObjectMapper mapper = new ObjectMapper();
@@ -40,6 +41,7 @@ class ProxyServiceTest {
             var body = mapper.readTree(exchange.getRequestBody());
             lastModel.set(body.path("model").asText(null));
             lastTemperature.set(body.has("temperature") ? body.path("temperature").asText() : null);
+            lastMessages.set(body.path("messages"));
             byte[] response = "{\"ok\":true}".getBytes();
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, response.length);
@@ -189,5 +191,74 @@ class ProxyServiceTest {
         assertThat(ids).hasSize(2);
         assertThat(ids).extracting(n -> n.get("id").asText())
                 .containsExactlyInAnyOrder("qwen3-14b", "qwen3.6-35b");
+    }
+
+    // ── mergeGuardrailSystemPrompt: zero coverage before this (SPEC-chat-prompt-quality-and-
+    // fidelity.md, A2 measurement flagged the gap). The marker below is guardrails.md's own
+    // heading, stable across edits to the body text.
+    private static final String GUARDRAIL_MARKER = "# Guardrails de segurança";
+
+    @Test
+    void completionsPrependsGuardrailToExistingTextualSystemMessage() throws Exception {
+        ProxyProperties props = props("env-key", "env-model");
+        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+
+        service.completions(
+                "{\"messages\":[{\"role\":\"system\",\"content\":\"Você é um analista financeiro.\"}]}",
+                "local", null);
+
+        assertThat(lastMessages.get()).hasSize(1);
+        String content = lastMessages.get().get(0).path("content").asText();
+        assertThat(content).startsWith(GUARDRAIL_MARKER);
+        assertThat(content).contains("Você é um analista financeiro.");
+        assertThat(content.indexOf(GUARDRAIL_MARKER)).isLessThan(content.indexOf("Você é um analista financeiro."));
+    }
+
+    @Test
+    void completionsInsertsGuardrailAsNewSystemMessageWhenNoneExists() throws Exception {
+        ProxyProperties props = props("env-key", "env-model");
+        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+
+        service.completions(
+                "{\"messages\":[{\"role\":\"user\",\"content\":\"qual o ROE da VALE3?\"}]}",
+                "local", null);
+
+        assertThat(lastMessages.get()).hasSize(2);
+        assertThat(lastMessages.get().get(0).path("role").asText()).isEqualTo("system");
+        assertThat(lastMessages.get().get(0).path("content").asText()).startsWith(GUARDRAIL_MARKER);
+        assertThat(lastMessages.get().get(1).path("role").asText()).isEqualTo("user");
+    }
+
+    /** A non-textual first-message content (multimodal content blocks) would read back as "" via
+     *  {@code asText()} and silently wipe the caller's prompt if merged in-place — must insert a
+     *  separate system message instead (see the javadoc on {@code mergeGuardrailSystemPrompt}). */
+    @Test
+    void completionsInsertsSeparateMessageWhenFirstSystemMessageIsMultimodal() throws Exception {
+        ProxyProperties props = props("env-key", "env-model");
+        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+
+        service.completions(
+                "{\"messages\":[{\"role\":\"system\",\"content\":[{\"type\":\"text\",\"text\":\"instrução\"}]}]}",
+                "local", null);
+
+        assertThat(lastMessages.get()).hasSize(2);
+        assertThat(lastMessages.get().get(0).path("role").asText()).isEqualTo("system");
+        assertThat(lastMessages.get().get(0).path("content").asText()).startsWith(GUARDRAIL_MARKER);
+        // The caller's original multimodal system message is preserved untouched, one slot later.
+        assertThat(lastMessages.get().get(1).path("content").isArray()).isTrue();
+    }
+
+    @Test
+    void completionsSkipsGuardrailForResponseFormatRequests() throws Exception {
+        ProxyProperties props = props("env-key", "env-model");
+        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+
+        service.completions(
+                "{\"messages\":[{\"role\":\"user\",\"content\":\"extraia os campos\"}],"
+                        + "\"response_format\":{\"type\":\"json_object\"}}",
+                "local", null);
+
+        assertThat(lastMessages.get()).hasSize(1);
+        assertThat(lastMessages.get().get(0).path("role").asText()).isEqualTo("user");
     }
 }
