@@ -20,7 +20,7 @@ groups:
   chat:
     swap: true
     exclusive: false
-    members: ["qwen3-14b", "qwen3.6-35b", "qwen3.8-27b", "qwen3.5-9b"]
+    members: ["qwen3-14b", "qwen3.6-35b", "qwen3.8-27b", "qwen3.8-27b-iq4xs", "qwen3.5-9b"]
   embeddings:
     swap: false
     exclusive: false
@@ -223,6 +223,42 @@ models:
       --flash-attn on
       --spec-type draft-mtp
       --spec-draft-n-max 2
+      --host 127.0.0.1
+      --port ${PORT}
+    ttl: 3600
+
+  # Dense 27B IQ4_XS (2026-08-18) — variante de menor qualidade/menor peso do 3.8-27b,
+  # entrada própria porque o tamanho diferente exige -ngl próprio. Não é o default
+  # (LOCAL_LLAMA_MODEL continua qwen3-14b; LazyInvest continua no qwen3.6-35b/3.8-27b).
+  # GGUF unsloth (~15,7GB, 4,25 bpw vs 4,85 bpw do Q4_K_M) — arquitetura qwen35 híbrida
+  # (SSM + atenção, 65 layers), mesmo com head MTP nativo (tensores blk.64.nextn.*).
+  # -ngl 58 medido com llama-fit-params (build TurboQuant) em 2026-08-18: ctx 32768 +
+  # KV q4_0/q4_0 + margem padrão de 1GiB — vs 54 do Q4_K_M (46 no entry acima, medido
+  # com bge-m3-gpu+reranker coexistindo, 2,4GB). Atenção: com as embeddings carregadas
+  # (grupo exclusive: false) a VRAM do chat cai ~2,4GB e o ngl efetivo real é menor —
+  # se for rodar em coexistência, rebaixar -ngl ou descarregar embeddings antes.
+  # IQ4_XS é visivelmente pior que Q4_K_M em qualidade — só compensa se o objetivo é
+  # espremer mais layers na GPU. Demais flags espelham o qwen3.8-27b (reasoning off,
+  # MTP n_max=3, KV q4_0, flash-attn).
+  # n_max 2->3 (2026-08-19): sweep local (prompt fixo, temp=0, 200 tokens) — 1:24,5 t/s,
+  # 2:27,6, 3:28,5 (draft acceptance 0.73), 4:24,5, 6:20,7 t/s. 3 é o pico; acima disso a
+  # taxa de aceitação cai e o custo de gerar drafts errados supera o ganho.
+  qwen3.8-27b-iq4xs:
+    cmd: >
+      ${server}
+      -m ${models}/Qwen3.8-27B-IQ4_XS.gguf
+      --reasoning off
+      --ctx-size 32768
+      --parallel 1
+      --threads-http 2
+      -t 8
+      --n-gpu-layers 58
+      --cache-ram 2048
+      --cache-type-k q4_0
+      --cache-type-v q4_0
+      --flash-attn on
+      --spec-type draft-mtp
+      --spec-draft-n-max 3
       --host 127.0.0.1
       --port ${PORT}
     ttl: 3600

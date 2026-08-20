@@ -17,7 +17,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public record ProxyProperties(Upstream llamaCpp, Upstream openrouter, Upstream embeddings, Upstream rerank,
         Routing routing, String adminToken, List<String> localChatModels) {
 
-    public record Upstream(String baseUrl, String apiKey, String defaultModel) {
+    public record Upstream(String baseUrl, String apiKey, String defaultModel, Double temperature) {
     }
 
     /** speedTokenThreshold: in "auto", a speed-hinted request bigger than this stays local. */

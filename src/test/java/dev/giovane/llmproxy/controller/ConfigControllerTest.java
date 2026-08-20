@@ -18,11 +18,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ConfigControllerTest {
 
     private static final ProxyProperties.Upstream OPENROUTER =
-            new ProxyProperties.Upstream("https://openrouter.ai/api", "env-secret-key", "env-or-model");
+            new ProxyProperties.Upstream("https://openrouter.ai/api", "env-secret-key", "env-or-model", null);
     private static final ProxyProperties.Upstream LLAMA_CPP =
-            new ProxyProperties.Upstream("http://localhost:8080", null, "env-llama-model");
+            new ProxyProperties.Upstream("http://localhost:8080", null, "env-llama-model", null);
     private static final ProxyProperties.Upstream EMBEDDINGS =
-            new ProxyProperties.Upstream("http://localhost:8081", null, "env-embed-model");
+            new ProxyProperties.Upstream("http://localhost:8081", null, "env-embed-model", null);
 
     private ProxyProperties props;
     private LlmConfigState configState;
@@ -49,7 +49,7 @@ class ConfigControllerTest {
     @Test
     void getReportsApiKeyUnsetWhenNoEnvKeyAndNoOverride() {
         ProxyProperties propsNoKey = new ProxyProperties(LLAMA_CPP,
-                new ProxyProperties.Upstream(OPENROUTER.baseUrl(), null, OPENROUTER.defaultModel()),
+                new ProxyProperties.Upstream(OPENROUTER.baseUrl(), null, OPENROUTER.defaultModel(), null),
                 EMBEDDINGS, EMBEDDINGS, new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "admin-token",
                 java.util.List.of());
         ConfigController noKeyController = new ConfigController(propsNoKey, configState);

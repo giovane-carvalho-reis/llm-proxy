@@ -9,11 +9,20 @@ llm-proxy:
     base-url: ${LOCAL_LLAMA_URL:http://localhost:8080}
     api-key: ${LOCAL_LLAMA_API_KEY:}
     default-model: ${LOCAL_LLAMA_MODEL:qwen3-14b}
+    # Forced onto every chat completions request, overriding whatever the caller sent —
+    # keeps local models deterministic/non-creative regardless of client config. Affects
+    # LazyInvest's Phase 2 (analysis) too: its own ollama.temperature/openrouter.temperature
+    # (0.7 in LazyInvest's application.yml) never reaches the backend, since every LazyInvest
+    # request routes through this proxy. Sampling policy lives here, not per-caller.
+    temperature: ${LOCAL_LLAMA_TEMPERATURE:0.0}
   openrouter:
     # base-url stops before /v1; the proxy appends /v1/chat/completions.
     base-url: ${OPENROUTER_URL:https://openrouter.ai/api}
     api-key: ${OPENROUTER_API_KEY:}
     default-model: ${OPENROUTER_MODEL:openai/gpt-4o-mini}
+    # Same override as llama-cpp above, applied to OpenRouter requests — same effect on
+    # LazyInvest's OpenRouter path (its openrouter.temperature is likewise discarded).
+    temperature: ${OPENROUTER_TEMPERATURE:0.0}
   embeddings:
     # bge-m3 via llama-swap (grupo "embeddings", CPU/RAM): sobe sob demanda e convive
     # com o modelo de chat carregado — ninguém mais gerencia processo de embed.
@@ -37,4 +46,4 @@ llm-proxy:
   admin-token: ${LLM_PROXY_ADMIN_TOKEN:}
   # Chat-capable ids from llama-swap.yaml's "chat" group (see /v1/models/chat) — llama-swap's
   # own /v1/models doesn't expose group membership, so this is the only source of truth.
-  local-chat-models: ${LOCAL_CHAT_MODELS:qwen3-14b,qwen3.6-35b,qwen3.8-27b,qwen3.5-9b}
+  local-chat-models: ${LOCAL_CHAT_MODELS:qwen3-14b,qwen3.6-35b,qwen3.8-27b,qwen3.8-27b-iq4xs,qwen3.5-9b}

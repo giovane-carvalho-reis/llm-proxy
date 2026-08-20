@@ -9,7 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class LlmConfigStateTest {
 
     private static final ProxyProperties.Upstream BASE =
-            new ProxyProperties.Upstream("https://openrouter.ai/api", "env-key", "env-model");
+            new ProxyProperties.Upstream("https://openrouter.ai/api", "env-key", "env-model", null);
 
     @Test
     void effectiveReturnsBaseUnchangedWhenNoOverrideIsSet() {

@@ -28,6 +28,7 @@ class ProxyServiceTest {
     private final AtomicReference<String> lastAuthHeader = new AtomicReference<>();
     private final AtomicReference<String> lastModel = new AtomicReference<>();
     private final AtomicReference<String> lastPath = new AtomicReference<>();
+    private final AtomicReference<String> lastTemperature = new AtomicReference<>();
     private final ObjectMapper mapper = new ObjectMapper();
 
     @BeforeEach
@@ -38,6 +39,7 @@ class ProxyServiceTest {
             lastPath.set(exchange.getRequestURI().getPath());
             var body = mapper.readTree(exchange.getRequestBody());
             lastModel.set(body.path("model").asText(null));
+            lastTemperature.set(body.has("temperature") ? body.path("temperature").asText() : null);
             byte[] response = "{\"ok\":true}".getBytes();
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, response.length);
@@ -75,7 +77,11 @@ class ProxyServiceTest {
     }
 
     private ProxyProperties props(String envApiKey, String envModel) {
-        ProxyProperties.Upstream up = new ProxyProperties.Upstream(baseUrl(), envApiKey, envModel);
+        return props(envApiKey, envModel, null);
+    }
+
+    private ProxyProperties props(String envApiKey, String envModel, Double temperature) {
+        ProxyProperties.Upstream up = new ProxyProperties.Upstream(baseUrl(), envApiKey, envModel, temperature);
         return new ProxyProperties(up, up, up, up, new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "",
                 java.util.List.of("qwen3-14b", "qwen3.6-35b", "qwen3.8-27b"));
     }
@@ -104,6 +110,39 @@ class ProxyServiceTest {
 
         assertThat(lastAuthHeader.get()).isEqualTo("Bearer env-key");
         assertThat(lastModel.get()).isEqualTo("env-model");
+    }
+
+    @Test
+    void completionsForcesConfiguredTemperatureOverClientValue() throws Exception {
+        ProxyProperties props = props("env-key", "env-model", 0.0);
+        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+
+        service.completions("{\"messages\":[],\"temperature\":1.5}", "openrouter", null);
+
+        assertThat(lastTemperature.get()).isEqualTo("0.0");
+    }
+
+    @Test
+    void completionsLeavesTemperatureUntouchedWhenNotConfigured() throws Exception {
+        ProxyProperties props = props("env-key", "env-model", null);
+        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+
+        service.completions("{\"messages\":[],\"temperature\":1.5}", "openrouter", null);
+
+        assertThat(lastTemperature.get()).isEqualTo("1.5");
+    }
+
+    /** Same policy as {@link #completionsForcesConfiguredTemperatureOverClientValue}, but for a
+     *  caller that never set the field at all (e.g. LazyInvest's Phase 2, which sends its own
+     *  0.7) — the forced value must still reach the backend, not just override an explicit one. */
+    @Test
+    void completionsForcesConfiguredTemperatureWhenClientOmitsIt() throws Exception {
+        ProxyProperties props = props("env-key", "env-model", 0.0);
+        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+
+        service.completions("{\"messages\":[]}", "openrouter", null);
+
+        assertThat(lastTemperature.get()).isEqualTo("0.0");
     }
 
     @Test

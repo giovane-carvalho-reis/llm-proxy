@@ -83,6 +83,6 @@ public class LlmConfigState {
         if (apiKey == base.apiKey() && defaultModel == base.defaultModel()) {
             return base;
         }
-        return new ProxyProperties.Upstream(base.baseUrl(), apiKey, defaultModel);
+        return new ProxyProperties.Upstream(base.baseUrl(), apiKey, defaultModel, base.temperature());
     }
 }

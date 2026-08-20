@@ -19,6 +19,8 @@
 
     <properties>
         <java.version>21</java.version>
+        <!-- byte-buddy 1.14.x (do BOM 3.3.5) não instrumenta bytecode do JDK 25 -->
+        <byte-buddy.version>1.17.8</byte-buddy.version>
     </properties>
 
     <dependencies>

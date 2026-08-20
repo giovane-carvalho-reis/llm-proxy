@@ -90,15 +90,25 @@ public class ProxyService {
         // Fill in the backend's default model when the caller didn't pin one — the whole point
         // of "auto" is that the caller doesn't know which backend (and thus which model id) runs.
         fillDefaultModel(json, up);
+        if (up.temperature() != null) {
+            json.put("temperature", up.temperature());
+        }
         if (Router.OPENROUTER.equals(target)) {
             pinOpenRouterProvider(json);
         }
+        long startedAt = System.currentTimeMillis();
         ResponseEntity<String> response = forward(up, "/v1/chat/completions", mapper.writeValueAsString(json));
+        long latencyMs = System.currentTimeMillis() - startedAt;
+
+        // Single parse of the response body, shared by every log line below — logOpenRouterProvider/
+        // logDraftAcceptance/logRequestSummary each used to re-parse it independently.
+        JsonNode resp = parseResponseBody(response);
         if (Router.OPENROUTER.equals(target)) {
-            logOpenRouterProvider(json, response);
+            logOpenRouterProvider(json, resp);
         } else {
-            logDraftAcceptance(json, response);
+            logDraftAcceptance(json, resp);
         }
+        logRequestSummary(target, json, resp, response.getStatusCode().value(), latencyMs);
         return response;
     }
 
@@ -236,19 +246,26 @@ public class ProxyService {
         }
     }
 
-    /** Best-effort: nunca falha a resposta ao cliente por causa de um log. */
-    private void logOpenRouterProvider(ObjectNode request, ResponseEntity<String> response) {
+    /** Best-effort: never lets a parse failure surface, response body already parsed once. */
+    private JsonNode parseResponseBody(ResponseEntity<String> response) {
         if (response.getBody() == null) {
-            return;
+            return com.fasterxml.jackson.databind.node.MissingNode.getInstance();
         }
         try {
-            JsonNode resp = mapper.readTree(response.getBody());
-            boolean hasToolCalls = resp.path("choices").path(0).path("message").has("tool_calls");
-            log.info("openrouter model={} provider={} toolCalls={}",
-                    request.path("model").asText("?"), resp.path("provider").asText("?"), hasToolCalls);
+            return mapper.readTree(response.getBody());
         } catch (IOException e) {
-            // observabilidade best-effort
+            return com.fasterxml.jackson.databind.node.MissingNode.getInstance();
         }
+    }
+
+    /** Best-effort: nunca falha a resposta ao cliente por causa de um log. */
+    private void logOpenRouterProvider(ObjectNode request, JsonNode resp) {
+        if (resp.isMissingNode()) {
+            return;
+        }
+        boolean hasToolCalls = resp.path("choices").path(0).path("message").has("tool_calls");
+        log.info("openrouter model={} provider={} toolCalls={}",
+                request.path("model").asText("?"), resp.path("provider").asText("?"), hasToolCalls);
     }
 
     /**
@@ -257,22 +274,31 @@ public class ProxyService {
      * silently drops "timings" — so the acceptance rate never reaches any app-level log unless we
      * read it here, before it's discarded. Best-effort: never fails the response over a log.
      */
-    private void logDraftAcceptance(ObjectNode request, ResponseEntity<String> response) {
-        if (response.getBody() == null) {
+    private void logDraftAcceptance(ObjectNode request, JsonNode resp) {
+        JsonNode timings = resp.path("timings");
+        int draftN = timings.path("draft_n").asInt(0);
+        if (draftN <= 0) {
             return;
         }
-        try {
-            JsonNode timings = mapper.readTree(response.getBody()).path("timings");
-            int draftN = timings.path("draft_n").asInt(0);
-            if (draftN <= 0) {
-                return;
-            }
-            int accepted = timings.path("draft_n_accepted").asInt(0);
-            log.info("mtp model={} draft={}/{} accepted={}%",
-                    request.path("model").asText("?"), accepted, draftN, Math.round(100.0 * accepted / draftN));
-        } catch (IOException e) {
-            // observabilidade best-effort
-        }
+        int accepted = timings.path("draft_n_accepted").asInt(0);
+        log.info("mtp model={} draft={}/{} accepted={}%",
+                request.path("model").asText("?"), accepted, draftN, Math.round(100.0 * accepted / draftN));
+    }
+
+    /**
+     * One line per chat request — route/model/status/latency/tokens. Before this, the proxy's
+     * only chat-path logs were openrouter-provider and MTP-acceptance (both conditional, both
+     * silent on the local/no-MTP path), so a request with no OpenRouter fallback and no
+     * speculative decoding left zero trace of route chosen, latency, or token counts — nothing
+     * to measure the temperature/guardrail changes in this round against. Usage fields come
+     * from the upstream's own OpenAI-shaped "usage" object; missing on some llama.cpp builds,
+     * so 0 there just means "not reported", not "zero tokens".
+     */
+    private void logRequestSummary(String target, ObjectNode request, JsonNode resp, int status, long latencyMs) {
+        JsonNode usage = resp.path("usage");
+        log.info("chat route={} model={} status={} latencyMs={} promptTokens={} completionTokens={}",
+                target, request.path("model").asText("?"), status, latencyMs,
+                usage.path("prompt_tokens").asInt(0), usage.path("completion_tokens").asInt(0));
     }
 
     private static void fillDefaultModel(ObjectNode json, ProxyProperties.Upstream up) {
