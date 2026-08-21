@@ -4,7 +4,6 @@ mode: subagent
 permission:
     read: allow
     edit: allow
-    edit: allow
     bash: allow
     grep: allow
     glob: allow

@@ -19,16 +19,20 @@ código, só docs.
 | cvm-financial-dataset | `cvm-financial-dataset` | `project-specs/cvm-financial-dataset/` |
 | llm-proxy | `llm-proxy` | `project-specs/llm-proxy/` |
 
-Cada pasta de docs tem 4 arquivos: `architecture.md` (stack, camadas, tabelas
-do banco), `glossary.md` (termos de domínio), `conventions.md` (commit/branch/
-nomenclatura), `decisions.md` (ADRs curtos + dívidas técnicas conhecidas).
+Cada pasta de docs tem 5 arquivos: `hotspots.md` (arquivo/módulo → por que é
+crítico, leia primeiro), `architecture.md` (stack, camadas, tabelas do
+banco), `glossary.md` (termos de domínio), `conventions.md` (commit/branch/
+nomenclatura), `decisions.md` (ADRs ativos curtos — fechados vivem em
+`decisions-archive.md`, só ler sob demanda).
 
 ## Como usar
 
-- **Antes de qualquer tarefa neste repo**, leia os 3-4 arquivos de docs
-  correspondentes em `project-specs/<projeto>/` — mesmo que a tarefa pareça
-  simples, isso evita reinventar nomes de tabela, contrariar uma decisão já
-  tomada, ou perder contexto de arquitetura.
+- **Antes de qualquer tarefa neste repo**, leia `hotspots.md` primeiro (mapa
+  do que é crítico) e depois os demais arquivos de docs correspondentes em
+  `project-specs/<projeto>/` — mesmo que a tarefa pareça simples, isso evita
+  reinventar nomes de tabela, contrariar uma decisão já tomada, ou perder
+  contexto de arquitetura. `decisions-archive.md` só é necessário se a tarefa
+  toca uma área com histórico de decisão fechada relevante.
 - **Ao concluir uma tarefa** que mude estrutura de pastas/tabelas, introduza
   um termo novo de domínio, ou tome uma decisão técnica relevante, atualize
   o arquivo correspondente em `project-specs/<projeto>/`. Resuma o que foi
@@ -41,5 +45,5 @@ nomenclatura), `decisions.md` (ADRs curtos + dívidas técnicas conhecidas).
 ## Novo projeto
 
 Copiar `project-specs/_template/` para uma pasta nova (kebab-case) e
-preencher os 4 arquivos; criar um `AGENTS.md` neste repo apontando pra lá
+preencher os 5 arquivos; criar um `AGENTS.md` neste repo apontando pra lá
 (ou rodar `project-specs/harness/sync.sh`, que gera esse arquivo).
