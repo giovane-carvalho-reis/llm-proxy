@@ -9,9 +9,13 @@ import dev.giovane.llmproxy.config.ProxyProperties;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -177,7 +181,63 @@ class ProxyServiceTest {
 
         var response = service.completions("{\"messages\":[]}", "local", null);
 
-        assertThat(response.getBody()).isEqualTo(upstreamBody);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        response.getBody().writeTo(out);
+        assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo(upstreamBody);
+    }
+
+    /** Regression for the bug fixed in this session: stream:true used to go through forward()
+     *  (toEntity(String.class)), which fully buffers the upstream body before returning — for an
+     *  SSE caller that means zero bytes reach the client until generation finishes entirely.
+     *  completions() must route stream:true through forwardStreaming() instead, whose
+     *  StreamingResponseBody copies bytes through unmodified. */
+    @Test
+    void completionsWithStreamTrueReturnsStreamingResponseBodyThatCopiesBytesAsIs() throws Exception {
+        String sseBody = "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n\n"
+                + "data: [DONE]\n\n";
+        upstream.removeContext("/v1/chat/completions");
+        upstream.createContext("/v1/chat/completions", exchange -> {
+            byte[] response = sseBody.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        ProxyProperties props = props("env-key", "env-model");
+        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+
+        ResponseEntity<StreamingResponseBody> response =
+                service.completions("{\"messages\":[],\"stream\":true}", "local", null);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        response.getBody().writeTo(out);
+        assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo(sseBody);
+    }
+
+    /** Regression: onStatus(s -> false, ...) never matched, so RestClient's default handler ran
+     *  anyway and threw on every non-2xx — a 429 from the upstream reached the caller as an
+     *  opaque Spring 500 instead of the real 429 + error body. */
+    @Test
+    void completionsRelaysUpstreamErrorStatusInsteadOfThrowing() throws Exception {
+        String errorBody = "{\"error\":{\"message\":\"rate limited\"}}";
+        upstream.removeContext("/v1/chat/completions");
+        upstream.createContext("/v1/chat/completions", exchange -> {
+            byte[] response = errorBody.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(429, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        ProxyProperties props = props("env-key", "env-model");
+        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+
+        ResponseEntity<StreamingResponseBody> response = service.completions("{\"messages\":[]}", "local", null);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(429);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        response.getBody().writeTo(out);
+        assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo(errorBody);
     }
 
     @Test

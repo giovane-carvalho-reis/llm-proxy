@@ -14,8 +14,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.StringHttpMessageConverter;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Set;
 
@@ -34,11 +36,13 @@ public class ProxyService {
 
     private static final Logger log = LoggerFactory.getLogger(ProxyService.class);
 
-    // RFC 7230 §6.1 hop-by-hop headers. The response body is fully buffered into a String
+    // RFC 7230 §6.1 hop-by-hop headers. forward() buffers the response body into a String
     // (toEntity(String.class)) before Tomcat writes it, so Tomcat computes its own
     // Transfer-Encoding/Content-Length — forwarding the upstream's Transfer-Encoding verbatim
     // makes the servlet response carry two, which downstream HTTP clients (e.g. the BFF's
-    // RestClient) reject with "multiple Transfer-Encoding headers".
+    // RestClient) reject with "multiple Transfer-Encoding headers". forwardStreaming() strips the
+    // same set for the same reason, even though it isn't buffering — Tomcat still computes its
+    // own framing for the async response.
     private static final Set<String> HOP_BY_HOP_HEADERS = Set.of(
             "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
             "te", "trailer", "transfer-encoding", "upgrade");
@@ -73,7 +77,18 @@ public class ProxyService {
                 .build();
     }
 
-    public ResponseEntity<String> completions(String body, String route, String priority) throws Exception {
+    // Declared as ResponseEntity<StreamingResponseBody> (not ResponseEntity<?>) all the way
+    // through to the controller — Spring's StreamingResponseBodyReturnValueHandler.
+    // supportsReturnType resolves the *declared* generic type via
+    // ResolvableType.forMethodParameter(...).getGeneric(0), not the runtime instance. A wildcard
+    // there resolves to null, the handler doesn't match, and Spring falls back to
+    // HttpMessageConverters — which have no converter for a raw lambda, producing
+    // "HttpMessageNotWritableException: No converter for [...Lambda] with preset Content-Type
+    // 'text/event-stream'" (caught live against this exact code before this comment existed).
+    // The non-streaming branch below wraps its normal buffered String response in a
+    // StreamingResponseBody that just writes those same bytes once, so both branches share one
+    // concrete, resolvable return type.
+    public ResponseEntity<StreamingResponseBody> completions(String body, String route, String priority) throws Exception {
         ObjectNode json = (ObjectNode) mapper.readTree(body);
 
         // Before routing: the guardrail adds real tokens to the prompt, and the auto-route
@@ -96,8 +111,20 @@ public class ProxyService {
         if (Router.OPENROUTER.equals(target)) {
             pinOpenRouterProvider(json);
         }
+        String payload = mapper.writeValueAsString(json);
+
+        // stream:true bypasses forward() entirely — that method fully buffers the upstream body
+        // into a String before returning, which for a streaming caller (LazyInvest's SSE chat)
+        // means zero bytes reach the client until the ENTIRE generation finishes. That silently
+        // turned every "final answer" stream into a single blocking wait as long as the model's
+        // full generation time, long enough to trip idle-timeout watchdogs downstream that assume
+        // tokens arrive incrementally. See forwardStreaming() for the real passthrough.
+        if (json.path("stream").asBoolean(false)) {
+            return forwardStreaming(up, "/v1/chat/completions", payload, target, json);
+        }
+
         long startedAt = System.currentTimeMillis();
-        ResponseEntity<String> response = forward(up, "/v1/chat/completions", mapper.writeValueAsString(json));
+        ResponseEntity<String> response = forward(up, "/v1/chat/completions", payload);
         long latencyMs = System.currentTimeMillis() - startedAt;
 
         // Single parse of the response body, shared by every log line below — logOpenRouterProvider/
@@ -109,7 +136,13 @@ public class ProxyService {
             logDraftAcceptance(json, resp);
         }
         logRequestSummary(target, json, resp, response.getStatusCode().value(), latencyMs);
-        return response;
+
+        StreamingResponseBody wrapped = out -> {
+            if (response.getBody() != null) {
+                out.write(response.getBody().getBytes(StandardCharsets.UTF_8));
+            }
+        };
+        return ResponseEntity.status(response.getStatusCode()).headers(response.getHeaders()).body(wrapped);
     }
 
     /** Embeddings passthrough — always the local bge-m3 llama-server; no routing to decide. */
@@ -316,8 +349,68 @@ public class ProxyService {
         }
         return stripHopByHopHeaders(spec.body(payload)
                 .retrieve()
-                .onStatus(s -> false, (req, res) -> { })   // relay upstream status/body instead of throwing
+                // s -> true: every status (including 4xx/5xx) is "handled" by this no-op, so
+                // RestClient's own exception-throwing default never runs and the caller gets the
+                // upstream's real status/body — e.g. a 429 rate-limit reaches LazyInvest as 429,
+                // not as an opaque Spring 500 (the predicate here used to be `s -> false`, which
+                // never matches, so the default handler ran anyway and threw on every non-2xx).
+                .onStatus(s -> true, (req, res) -> { })
                 .toEntity(String.class));
+    }
+
+    /**
+     * Real SSE passthrough for {@code stream: true} chat completions — same shape as
+     * lazy-invest-bff's {@code ProxyController.proxyChatStream}. {@code exchange(fn, false)}
+     * keeps the upstream connection open past the callback (the {@code false} disables
+     * RestClient's default auto-close), so the {@link StreamingResponseBody} below can read and
+     * forward the body lazily, on Spring MVC's async dispatch thread, instead of everything
+     * being read eagerly inside this method like {@link #forward} does.
+     */
+    private ResponseEntity<StreamingResponseBody> forwardStreaming(ProxyProperties.Upstream up, String path,
+            String payload, String target, ObjectNode request) {
+        var spec = http.post()
+                .uri(up.baseUrl() + path)
+                .contentType(MediaType.APPLICATION_JSON);
+        if (up.apiKey() != null && !up.apiKey().isBlank()) {
+            spec = spec.header("Authorization", "Bearer " + up.apiKey());
+        }
+        long startedAt = System.currentTimeMillis();
+        return spec.body(payload).exchange((req, res) -> {
+            HttpHeaders headers = new HttpHeaders();
+            res.getHeaders().forEach((name, values) -> {
+                if (!HOP_BY_HOP_HEADERS.contains(name.toLowerCase())) {
+                    headers.put(name, values);
+                }
+            });
+            StreamingResponseBody streamBody = out -> {
+                // Can't parse token/usage counts out of an SSE body (see completions()'s
+                // non-streaming branch for that) — log what's available without pretending to
+                // have counts this path structurally can't produce.
+                try {
+                    try (InputStream in = res.getBody()) {
+                        byte[] buf = new byte[512];
+                        int n;
+                        while ((n = in.read(buf)) != -1) {
+                            out.write(buf, 0, n);
+                            out.flush(); // each SSE event must reach the client as it arrives, not batched
+                        }
+                    }
+                } catch (IOException clientGone) {
+                    // The write side (out) failing mid-stream is the client disconnecting —
+                    // same "expected, not a bug" case the BFF's proxyChatStream and LazyInvest's
+                    // SSE heartbeat both already treat as routine, not an error. Left uncaught,
+                    // this surfaced as a full ERROR stack trace ("Broken pipe") from Tomcat for
+                    // the ordinary case of a browser tab closing mid-response.
+                    log.debug("[chat-stream] client disconnected mid-stream | route={} model={}",
+                            target, request.path("model").asText("?"), clientGone);
+                } finally {
+                    log.info("chat route={} model={} status={} latencyMs={} (stream)",
+                            target, request.path("model").asText("?"), res.getStatusCode().value(),
+                            System.currentTimeMillis() - startedAt);
+                }
+            };
+            return ResponseEntity.status(res.getStatusCode()).headers(headers).body(streamBody);
+        }, false);
     }
 
     private static ResponseEntity<String> stripHopByHopHeaders(ResponseEntity<String> upstream) {

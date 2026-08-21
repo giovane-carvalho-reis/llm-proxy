@@ -13,6 +13,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -67,8 +68,8 @@ class AdminTokenInterceptorTest {
 
     @Test
     void chatCompletionsWorksWithoutAnyAdminHeader() throws Exception {
-        when(proxyService.completions(anyString(), anyString(), any()))
-                .thenReturn(ResponseEntity.ok("{}"));
+        StreamingResponseBody emptyBody = out -> { };
+        when(proxyService.completions(anyString(), anyString(), any())).thenReturn(ResponseEntity.ok(emptyBody));
 
         mockMvc.perform(post("/v1/chat/completions")
                         .contentType(MediaType.APPLICATION_JSON)

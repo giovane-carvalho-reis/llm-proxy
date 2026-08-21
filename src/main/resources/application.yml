@@ -2,6 +2,14 @@ server:
   # 8091: cvm-pdf-processor usa 8085, llama-swap 8080, embeddings 8082, cvm-ingestor 8090.
   port: 8091
 
+spring:
+  mvc:
+    async:
+      # StreamingResponseBody (forwardStreaming, chat completions com stream:true) roda no
+      # dispatch async do Spring MVC — sem isto o default do container (30s) corta uma geração
+      # longa no meio, muito antes do llm-proxy.routing.read-timeout (15m) abaixo.
+      request-timeout: 900000  # 15 min, alinhado ao routing.read-timeout
+
 llm-proxy:
   llama-cpp:
     # Points at llama-swap (not raw llama-server): it hot-swaps qwen3-14b <-> qwen3.6-35b

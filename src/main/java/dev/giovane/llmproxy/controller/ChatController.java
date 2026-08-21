@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 /**
  * OpenAI-compatible reverse proxy endpoints. Callers never learn which backend ran —
@@ -25,8 +26,11 @@ public class ChatController {
         this.service = service;
     }
 
+    // Declared return type must stay exactly ResponseEntity<StreamingResponseBody> (not
+    // ResponseEntity<?>) — see the comment on ProxyService.completions() for why a wildcard
+    // here breaks Spring's streaming return-value handler.
     @PostMapping("/v1/chat/completions")
-    ResponseEntity<String> completions(
+    ResponseEntity<StreamingResponseBody> completions(
             @RequestBody String body,
             @RequestHeader(value = "X-Llm-Route", defaultValue = "auto") String route,
             @RequestHeader(value = "X-Llm-Priority", required = false) String priority) throws Exception {
