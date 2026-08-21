@@ -378,7 +378,12 @@ public class ProxyService {
         return spec.body(payload).exchange((req, res) -> {
             HttpHeaders headers = new HttpHeaders();
             res.getHeaders().forEach((name, values) -> {
-                if (!HOP_BY_HOP_HEADERS.contains(name.toLowerCase())) {
+                // Content-Length also excluded here (unlike forward()'s stripHopByHopHeaders,
+                // which keeps it because the buffered body there has that exact byte length): a
+                // compliant SSE response never declares one upfront, so forwarding a stale value
+                // — from a misbehaving upstream or an intermediate proxy — would make Tomcat
+                // frame the chunked body wrong instead of computing its own framing.
+                if (!HOP_BY_HOP_HEADERS.contains(name.toLowerCase()) && !"content-length".equalsIgnoreCase(name)) {
                     headers.put(name, values);
                 }
             });
