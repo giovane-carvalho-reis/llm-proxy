@@ -37,9 +37,9 @@ nomenclatura), `decisions.md` (ADRs ativos curtos — fechados vivem em
   um termo novo de domínio, ou tome uma decisão técnica relevante, atualize
   o arquivo correspondente em `project-specs/<projeto>/`. Resuma o que foi
   atualizado (ou diga "nada a atualizar") antes de encerrar a sessão.
-- **Implementar uma spec** (`project-specs/<projeto>/specs/SPEC-*.md`): ver
-  `project-specs/harness/SPEC_IMPLEMENTATION_POLICY.md` — use o pipeline
-  (`/implement`), não monte um fan-out de agentes manualmente.
+- **Specs** vivem em `project-specs/<projeto>/specs/SPEC-<slug>.md`. São
+  implementadas na sessão principal e movidas pra `specs/done/` depois do
+  merge — a spec ativa é contexto de tarefa, a arquivada é histórico.
 - Nunca push automático — commit local, revisão manual, push manual.
 
 ## Novo projeto
