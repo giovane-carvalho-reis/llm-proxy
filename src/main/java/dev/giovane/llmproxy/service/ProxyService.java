@@ -329,9 +329,16 @@ public class ProxyService {
      */
     private void logRequestSummary(String target, ObjectNode request, JsonNode resp, int status, long latencyMs) {
         JsonNode usage = resp.path("usage");
-        log.info("chat route={} model={} status={} latencyMs={} promptTokens={} completionTokens={}",
+        // "timings" é o mesmo campo lido por logDraftAcceptance — builds sem --spec-type draft-mtp
+        // (ou sem suporte a timings) simplesmente não têm os nós, e prompt_ms/predicted_ms ficam
+        // ausentes (logados como "n/d", nunca "0") em vez de mentir "zero" como zero segundos reais.
+        JsonNode timings = resp.path("timings");
+        String promptMs = timings.has("prompt_ms") ? String.valueOf(timings.path("prompt_ms").asDouble()) : "n/d";
+        String predictedMs = timings.has("predicted_ms") ? String.valueOf(timings.path("predicted_ms").asDouble()) : "n/d";
+        log.info("chat route={} model={} status={} latencyMs={} promptTokens={} completionTokens={} promptMs={} predictedMs={}",
                 target, request.path("model").asText("?"), status, latencyMs,
-                usage.path("prompt_tokens").asInt(0), usage.path("completion_tokens").asInt(0));
+                usage.path("prompt_tokens").asInt(0), usage.path("completion_tokens").asInt(0),
+                promptMs, predictedMs);
     }
 
     private static void fillDefaultModel(ObjectNode json, ProxyProperties.Upstream up) {
