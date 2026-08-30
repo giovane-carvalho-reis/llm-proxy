@@ -20,7 +20,7 @@ groups:
   chat:
     swap: true
     exclusive: false
-    members: ["qwen3-14b", "qwen3.6-35b", "qwen3.8-27b", "qwen3.8-27b-iq4xs", "qwen3.5-9b"]
+    members: ["qwen3-14b", "qwen3.6-35b", "qwen3.8-27b", "qwen3.8-27b-iq4xs", "qwen3.5-9b", "gemma-4-26b"]
   embeddings:
     swap: false
     exclusive: false
@@ -180,6 +180,49 @@ models:
     # ttl 3600 (era 600): voltar ao chat depois de uma pausa de 10min pagava o load dos
     # pesos (~21GB) na primeira pergunta (~30-90s além da geração). Embeddings coexistem
     # (exclusive: false); a troca com o 14B de extração continua normal.
+    ttl: 3600
+
+  # Gemma 4 26B-A4B MoE (2026-08-28) — opção de chat p/ análise financeira / RAG /
+  # tool calling. NÃO é o default (LOCAL_LLAMA_MODEL segue qwen3-14b; LazyInvest segue
+  # qwen3.6-35b). Arquivo gemma-4-26B-A4B-it-QAT-Q4_0.gguf
+  # (14,4 GB, QAT Q4_0 oficial Google). Arch gemma4: 30 layers, 128 experts / 8 ativos,
+  # atenção intercalada — 25 layers sliding-window (1024) + 5 globais, ctx nativo 256K.
+  # Mesma filosofia do qwen3.6-35b: -ngl 999 + --n-cpu-moe p/ caber nos 16 GB com o
+  # bge-m3-gpu co-residente. --n-cpu-moe 10 = ponto de partida (só ~7-10 dos 30 layers
+  # de experts precisam sair da GPU); AJUSTAR após benchmark — sweep 6/8/10/12/14 e
+  # llama-fit-params. Se der CUDA OOM no load, subir; se bge-m3-gpu estiver descarregado
+  # (timer 4min, ADR-004) dá pra descer p/ 4-6.
+  # --ctx-size 51200 = ~50K. KV q4_0 + --flash-attn on (obrigatório p/ V quantizado).
+  # SEM --swa-full: com iSWA o KV a 50K fica ~0,35 GB; --swa-full subiria p/ ~3 GB e
+  # estoura VRAM. Custo: prompt cujo prefixo muda entre requests reprocessa inteiro
+  # (aceitável com --parallel 1, é só latência do 1º token).
+  # --reasoning off: padrão da casa (ADR-007); o template do Gemma 4 vem com thinking=1.
+  # --temp 0: determinismo p/ extração/tool calling; o proxy já força temperature=0.0
+  # (ADR-010), aqui é redundância. Sobrescreve o sampling recomendado do Gemma (temp 1.0);
+  # se resumo aberto ficar "chapado", testar 0.3-0.7 chamando o llama-server direto.
+  # -t 8: 8 cores físicos (Ryzen 7 5700X), crítico com experts na CPU.
+  # Tool calling: o GGUF traz tokens <|tool_response> e template próprio (marcações
+  # <|turn>, não <start_of_turn>). Se tool_calls não fizer parse, adicionar --jinja.
+  # MTP/speculative: indisponível — este GGUF não tem tensores blk.N.nextn.* e os
+  # drafters oficiais do Gemma 4 ainda não convertem p/ llama.cpp (disc. ggml-org #22735).
+  gemma-4-26b:
+    cmd: >
+      ${server}
+      --model ${models}/gemma-4-26B-A4B-it-QAT-Q4_0.gguf
+      --reasoning off
+      --ctx-size 51200
+      --parallel 1
+      --threads-http 2
+      -t 8
+      --n-gpu-layers 999
+      --n-cpu-moe 10
+      --cache-ram 2048
+      --cache-type-k q4_0
+      --cache-type-v q4_0
+      --flash-attn on
+      --temp 0
+      --host 127.0.0.1
+      --port ${PORT}
     ttl: 3600
 
   # Dense 27B (2026-08-14) — opção de chat, NÃO é o default (LOCAL_LLAMA_MODEL continua
