@@ -62,4 +62,11 @@ public class ChatController {
     ResponseEntity<String> chatModels() {
         return service.chatModels();
     }
+
+    /** OpenRouter catalog, filtered to models that support structured_outputs (JSON Schema
+     * estrito) — o que o pipeline de extração de dividendos do cvm-pdf-processor exige. */
+    @GetMapping("/v1/models/openrouter")
+    ResponseEntity<String> openrouterModels() {
+        return service.openrouterModels();
+    }
 }

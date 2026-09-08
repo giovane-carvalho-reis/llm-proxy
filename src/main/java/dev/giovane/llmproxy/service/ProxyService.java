@@ -215,6 +215,62 @@ public class ProxyService {
         }
     }
 
+    // Cache manual (sem lib nova) do catálogo filtrado da OpenRouter — a chamada em models() /
+    // openrouterModels() é feita a cada abertura da tela de reparo de dividendos; sem cache isso
+    // vira uma requisição à OpenRouter por visita. TTL de 10min: catálogo de modelos muda em
+    // dias/semanas, não em minutos. ponytail: TTL fixo, sem invalidação manual — se um modelo
+    // sumir/aparecer no meio da janela, o operador só vê depois de 10min; ok pra esse caso de uso.
+    private static final java.time.Duration OPENROUTER_MODELS_TTL = java.time.Duration.ofMinutes(10);
+    private volatile String openrouterModelsCache;
+    private volatile java.time.Instant openrouterModelsCachedAt = java.time.Instant.EPOCH;
+
+    /**
+     * Modelos da OpenRouter elegíveis pro pipeline de extração de dividendos: precisam suportar
+     * {@code structured_outputs} (JSON Schema estrito) — é o que {@code _openai_strict_schema}
+     * exige no cvm-pdf-processor (ver ADR-035). O catálogo completo da OpenRouter tem ~425
+     * modelos, a maioria irrelevante pra esse uso; filtra pra só os utilizáveis aqui.
+     */
+    public synchronized ResponseEntity<String> openrouterModels() {
+        java.time.Instant now = java.time.Instant.now();
+        if (openrouterModelsCache != null
+                && now.isBefore(openrouterModelsCachedAt.plus(OPENROUTER_MODELS_TTL))) {
+            return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(openrouterModelsCache);
+        }
+        ResponseEntity<String> upstream = stripHopByHopHeaders(http.get()
+                .uri(props.openrouter().baseUrl() + "/v1/models")
+                .retrieve()
+                .onStatus(s -> false, (req, res) -> { })
+                .toEntity(String.class));
+        if (!upstream.getStatusCode().is2xxSuccessful() || upstream.getBody() == null) {
+            return upstream;
+        }
+        try {
+            ObjectNode json = (ObjectNode) mapper.readTree(upstream.getBody());
+            JsonNode data = json.get("data");
+            if (data instanceof ArrayNode array) {
+                ArrayNode filtered = mapper.createArrayNode();
+                array.forEach(model -> {
+                    JsonNode supported = model.path("supported_parameters");
+                    boolean eligible = supported.isArray() && java.util.stream.StreamSupport
+                            .stream(supported.spliterator(), false)
+                            .anyMatch(p -> "structured_outputs".equals(p.asText()));
+                    if (eligible) {
+                        filtered.add(model);
+                    }
+                });
+                json.set("data", filtered);
+            }
+            String body = mapper.writeValueAsString(json);
+            openrouterModelsCache = body;
+            openrouterModelsCachedAt = now;
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            return ResponseEntity.ok().headers(headers).body(body);
+        } catch (IOException e) {
+            return upstream;
+        }
+    }
+
     /**
      * Loads the guardrail text, dropping a leading HTML comment block. That block holds the
      * maintenance note for whoever edits the file (see guardrails.md) — it is for humans, and

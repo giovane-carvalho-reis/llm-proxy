@@ -63,8 +63,17 @@ class ProxyServiceTest {
             exchange.close();
         });
         upstream.createContext("/v1/models", exchange -> {
+            // supported_parameters em 2 dos 4 (openai/gpt-4o-mini, deepseek/deepseek-chat) —
+            // usado por openrouterModelsFiltersToStructuredOutputsCapableModels abaixo; os
+            // outros dois seguem sem o campo, cobrindo tanto "ausente" quanto "presente sem o
+            // valor certo".
             byte[] response = ("{\"data\":[{\"id\":\"bge-m3\"},{\"id\":\"qwen3-14b\"},"
-                    + "{\"id\":\"bge-reranker-v2-m3\"},{\"id\":\"qwen3.6-35b\"}]}").getBytes();
+                    + "{\"id\":\"bge-reranker-v2-m3\"},{\"id\":\"qwen3.6-35b\"},"
+                    + "{\"id\":\"openai/gpt-4o-mini\",\"supported_parameters\":"
+                    + "[\"temperature\",\"structured_outputs\"]},"
+                    + "{\"id\":\"deepseek/deepseek-chat\",\"supported_parameters\":"
+                    + "[\"structured_outputs\",\"tools\"]},"
+                    + "{\"id\":\"meta/llama-3-8b\",\"supported_parameters\":[\"temperature\"]}]}").getBytes();
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, response.length);
             exchange.getResponseBody().write(response);
@@ -251,6 +260,33 @@ class ProxyServiceTest {
         assertThat(ids).hasSize(2);
         assertThat(ids).extracting(n -> n.get("id").asText())
                 .containsExactlyInAnyOrder("qwen3-14b", "qwen3.6-35b");
+    }
+
+    @Test
+    void openrouterModelsFiltersToStructuredOutputsCapableModels() throws Exception {
+        ProxyProperties props = props("env-key", "env-model");
+        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+
+        var response = service.openrouterModels();
+
+        var ids = mapper.readTree(response.getBody()).get("data");
+        assertThat(ids).extracting(n -> n.get("id").asText())
+                .containsExactlyInAnyOrder("openai/gpt-4o-mini", "deepseek/deepseek-chat");
+    }
+
+    @Test
+    void openrouterModelsCachesAcrossCalls() throws Exception {
+        ProxyProperties props = props("env-key", "env-model");
+        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+
+        service.openrouterModels();
+        upstream.stop(0);  // upstream indisponível na 2ª chamada — só passa se veio do cache
+        var second = service.openrouterModels();
+
+        assertThat(second.getStatusCode().is2xxSuccessful()).isTrue();
+        var ids = mapper.readTree(second.getBody()).get("data");
+        assertThat(ids).extracting(n -> n.get("id").asText())
+                .containsExactlyInAnyOrder("openai/gpt-4o-mini", "deepseek/deepseek-chat");
     }
 
     // ── mergeGuardrailSystemPrompt: zero coverage before this (SPEC-chat-prompt-quality-and-
