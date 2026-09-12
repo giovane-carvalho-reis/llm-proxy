@@ -403,6 +403,14 @@ public class ProxyService {
         }
     }
 
+    // SPEC-servidor-de-inferencia-local §6: sem isto, um backend caído (llama-swap fora do ar)
+    // só aparecia como stack trace bruto do java.net.ConnectException — nenhuma linha dizia
+    // "o backend está ausente", então a regra de alarme do Loki (`|= "backend indisponível"`)
+    // nunca disparava. Throttle de 1/min por baseUrl: evita 1 linha ERROR por request numa
+    // fila de retry (cvm-pdf-processor já loga "embed retryable attempt=N/6" por cima disso).
+    private static final java.time.Duration BACKEND_DOWN_LOG_THROTTLE = java.time.Duration.ofMinutes(1);
+    private final java.util.Map<String, java.time.Instant> lastBackendDownLog = new java.util.concurrent.ConcurrentHashMap<>();
+
     private ResponseEntity<String> forward(ProxyProperties.Upstream up, String path, String payload) {
         var spec = http.post()
                 .uri(up.baseUrl() + path)
@@ -410,15 +418,30 @@ public class ProxyService {
         if (up.apiKey() != null && !up.apiKey().isBlank()) {
             spec = spec.header("Authorization", "Bearer " + up.apiKey());
         }
-        return stripHopByHopHeaders(spec.body(payload)
-                .retrieve()
-                // s -> true: every status (including 4xx/5xx) is "handled" by this no-op, so
-                // RestClient's own exception-throwing default never runs and the caller gets the
-                // upstream's real status/body — e.g. a 429 rate-limit reaches LazyInvest as 429,
-                // not as an opaque Spring 500 (the predicate here used to be `s -> false`, which
-                // never matches, so the default handler ran anyway and threw on every non-2xx).
-                .onStatus(s -> true, (req, res) -> { })
-                .toEntity(String.class));
+        try {
+            return stripHopByHopHeaders(spec.body(payload)
+                    .retrieve()
+                    // s -> true: every status (including 4xx/5xx) is "handled" by this no-op, so
+                    // RestClient's own exception-throwing default never runs and the caller gets the
+                    // upstream's real status/body — e.g. a 429 rate-limit reaches LazyInvest as 429,
+                    // not as an opaque Spring 500 (the predicate here used to be `s -> false`, which
+                    // never matches, so the default handler ran anyway and threw on every non-2xx).
+                    .onStatus(s -> true, (req, res) -> { })
+                    .toEntity(String.class));
+        } catch (org.springframework.web.client.ResourceAccessException e) {
+            logBackendDownThrottled(up.baseUrl(), path, e);
+            throw e;
+        }
+    }
+
+    private void logBackendDownThrottled(String baseUrl, String path, Exception cause) {
+        java.time.Instant now = java.time.Instant.now();
+        java.time.Instant last = lastBackendDownLog.get(baseUrl);
+        if (last != null && now.isBefore(last.plus(BACKEND_DOWN_LOG_THROTTLE))) {
+            return;
+        }
+        lastBackendDownLog.put(baseUrl, now);
+        log.error("backend indisponível | baseUrl={} path={} causa={}", baseUrl, path, cause.getMessage());
     }
 
     /**
