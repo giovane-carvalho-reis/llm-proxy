@@ -10,9 +10,12 @@ Você é o scout do repo `llm-proxy`. Seu trabalho é **localizar**, não explic
 Mapa do repo (confiável; comece por ele):
 ---
 repo: llm-proxy
-gerado-em: 25895bd
+gerado-em: 60568d7
 ---
 # Codemap — llm-proxy
+
+> Paths das tabelas são relativos a `src/main/java/dev/giovane/llmproxy/`, salvo indicação. Rascunhado pelo `scout-llm-proxy` e
+> conferido em 2026-09-19. Estrutura mudou → atualizar aqui (`spec-sync`) e rodar `render.py --apply`.
 
 ## Comandos
 | Ação | Comando |
@@ -23,36 +26,43 @@ gerado-em: 25895bd
 | lint | `mvn -q -DskipTests compile` |
 
 ## Pacotes → responsabilidade
-| Pacote/pasta | Arquivos | Entrada principal | Testes |
+| Pacote/pasta | Responsabilidade | Entrada principal | Testes |
 |---|---|---|---|
-| `dev/giovane` | 9 | `src/main/java/dev/giovane/llmproxy/LlmProxyApplication.java` | `llm-proxy` tests próximos ao pacote |
+| `controller` | Endpoints: chat/completions (stream e buffered), embeddings, rerank, models, config, health | `ChatController`, `ConfigController` | `ConfigControllerTest` |
+| `config` | Binding de propriedades, overrides de config em runtime, interceptor de token admin (fail-closed) | `ProxyProperties`, `LlmConfigState` | `AdminTokenInterceptorTest`, `LlmConfigStateTest` |
+| `router` | Decide llama.cpp local × OpenRouter (hint explícito ou heurística de velocidade/tokens) | `Router` | `ProxyServiceTest` |
+| `service` | Proxy: repasse aos upstreams, stream/buffered, injeção de guardrail, headers hop-by-hop | `ProxyService` | `ProxyServiceTest` |
 
 ## Onde fica…
-
-- `src/main/java/dev/giovane/llmproxy/LlmProxyApplication.java` — entrypoint
-- `src/main/java/dev/giovane/llmproxy/controller/ChatController.java` — entrypoint
-- `src/main/java/dev/giovane/llmproxy/controller/ConfigController.java` — entrypoint
-- `src/test/java/dev/giovane/llmproxy/controller/ConfigControllerTest.java` — entrypoint
+- roteamento local × OpenRouter → `router/Router.java`
+- config runtime de modelos (`/v1/config`) → `config/LlmConfigState.java` + `controller/ConfigController.java`
+- proteção de `/v1/config` (`X-Admin-Token`) → `config/AdminTokenInterceptor.java`
+- embeddings (bge-m3) e rerank → `service/ProxyService.java`
+- modelos e grupos do llama-swap → `llama-swap.yaml` (raiz do repo)
+- units systemd (`llama-swap.service`, `bge-m3-recycle.timer`) → `systemd/`
+- config da aplicação → `src/main/resources/application.yml`
+- prompt de guardrail → `src/main/resources/prompts/guardrails.md`
 
 ## Fronteiras
-- Repo: `llm-proxy` — contratos HTTP em `project-specs/shared/contracts.md`
-- Docs: `project-specs/llm-proxy/`
-
-_Esqueleto gerado 2026-09-19 — preencher Responsabilidade e Onde fica manualmente._
+- Chama: llama-swap/llama-server local (:8080), OpenRouter
+- É chamado por: `LazyInvest`, `cvm-ingestor`, `cvm-pdf-processor`, `lazy-invest-bff` (inclusive `/llm-config/**` do Insight) — ver `shared/contracts.md`
 
 
 Pontos frágeis:
 # Hotspots — llm-proxy
 
 > Onde olhar primeiro antes de mexer no código. Granularidade de arquivo/módulo, não classe.
+>
+> Uma linha por item. Texto integral de cada ponto (invariantes, histórico, números) em
+> [`decisions-ativos.md`](./decisions-ativos.md) § "Invariantes dos hotspots", pelo rótulo `H<n>`.
 
-- `src/main/java/dev/giovane/llmproxy/service/ProxyService.java` — 455 linhas, quase todo o comportamento do serviço: roteamento local/OpenRouter, bifurcação streaming vs. não-streaming (ADR-012), override de `temperature` (ADR-010), log por request (ADR-011). Qualquer mudança aqui atinge todos os callers de uma vez.
-- `llama-swap.yaml` — **fora do container e fora do Java**, mas é onde vive metade das decisões deste projeto: `-b/-ub` dos embeddings (ADR-002), `--cache-ram 0` (ADR-003), `--reasoning off` (ADR-007), `-ngl` por modelo (ADR-006/008/009). Editar sem medir `-ngl` no hardware real quebra o load do modelo.
-- `systemd/llama-swap.service` + `bge-m3-recycle.timer` — `MemoryMax=16G` com margem apertada sob chat+embeddings concorrentes (ADR-004). Existe em duas cópias que precisam ficar sincronizadas: a do repo e a deployed em `~/.config/systemd/user/`.
-- `docker-compose.yml` (`LOCAL_LLAMA_URL`/`EMBED_URL`/`RERANK_URL`) — sem essas env vars o container resolve `localhost:8080` como ele mesmo, e o caller cai em fallback **sem erro visível** (ADR-005). Todo upstream novo precisa da sua.
-- `src/main/java/dev/giovane/llmproxy/config/AdminTokenInterceptor.java` — proteção fail-closed de `/v1/config/**`; token vazio/ausente é o caso de borda que já teve teste dedicado (`AdminTokenInterceptorEmptyTokenTest`).
-- `src/main/java/dev/giovane/llmproxy/config/LlmConfigState.java` — config mutável em memória (`AtomicReference`); é o que faz o upstream efetivo mudar em runtime, então bug aqui muda o backend de todo mundo sem deploy.
-- `scripts/setup-llama-swap.sh` + `LLAMA_SERVER_BIN`/`LD_LIBRARY_PATH` — setup específico da máquina (ADR-001); são os pontos a revisar ao migrar de workstation.
+- `service/ProxyService.java` — quase todo o comportamento: roteamento local/OpenRouter, stream × não-stream, override de `temperature`, log por request (ADR-010, ADR-012, H1)
+- `llama-swap.yaml` — fora do container e do Java, mas guarda metade das decisões (`-b/-ub`, cache-ram, reasoning, `-ngl`) (ADR-002, ADR-003, ADR-007, H2)
+- `systemd/llama-swap.service` + `bge-m3-recycle.timer` — `MemoryMax=16G` com margem apertada; cópia do repo e a instalada precisam ficar iguais (ADR-004, H3)
+- `docker-compose.yml` (`LOCAL_LLAMA_URL`/`EMBED_URL`/`RERANK_URL`) — sem as envs o container resolve `localhost` como ele mesmo e cai em fallback sem erro (ADR-005, H4)
+- `config/AdminTokenInterceptor.java` — proteção fail-closed de `/v1/config/**`; token vazio é o caso de borda coberto por teste (H5)
+- `config/LlmConfigState.java` — config mutável em memória; bug aqui muda o backend de todos sem deploy (H6)
+- `scripts/setup-llama-swap.sh` (`LLAMA_SERVER_BIN`/`LD_LIBRARY_PATH`) — setup específico da máquina; revisar ao trocar de workstation (ADR-001, H7)
 
 
 Regras:
