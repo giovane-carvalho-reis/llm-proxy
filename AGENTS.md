@@ -1,49 +1,27 @@
-# Documentação central dos projetos
+<!-- GERADO por project-specs/harness/render.py — não editar -->
 
-Existe um repositório central de documentação técnica em
-`project-specs` (irmão deste repo), com a "fonte de verdade" de cada
-projeto pessoal (arquitetura, glossário, convenções, decisões). Ele não tem
-código, só docs. Lido nativamente via `AGENTS.md` (OpenCode, Codex, Cursor);
-Claude Code usa `CLAUDE.md` → `@AGENTS.md`.
+# llm-proxy — instrução base
 
-Índice completo: `project-specs/README.md`.
+Documentação central em `project-specs/llm-proxy/` (hotspots, codemap, architecture, glossary,
+conventions, decisions). Specs ativas em `project-specs/llm-proxy/specs/`.
 
-## Projetos cobertos
+## Este repo
 
-| Projeto | Path do código | Docs |
-|---|---|---|
-| LazyInvest | `LazyInvest` | `project-specs/lazyinvest/` |
-| LazyInvest-Insight | `LazyInvest-Insight` | `project-specs/lazyinvest-insight/` |
-| lazy-invest-bff | `lazy-invest-bff` | `project-specs/lazyinvest-bff/` |
-| cvm-ingestor | `cvm-ingestor` | `project-specs/cvm-ingestor/` |
-| cvm-pdf-processor | `cvm-pdf-processor` | `project-specs/cvm-pdf-processor/` |
-| llm-proxy | `llm-proxy` | `project-specs/llm-proxy/` |
+- **Stack:** java
+- **Propósito:** Gateway OpenAI-compatible → llama.cpp local / OpenRouter
+- **Teste unit:** `mvn -q test`
+- **Integração:** `mvn -q verify`
 
-Cada pasta de docs tem 5 arquivos: `hotspots.md` (arquivo/módulo → por que é
-crítico, leia primeiro), `architecture.md` (stack, camadas, tabelas do
-banco), `glossary.md` (termos de domínio), `conventions.md` (commit/branch/
-nomenclatura), `decisions.md` (ADRs ativos curtos — fechados vivem em
-`decisions-archive.md`, só ler sob demanda).
+## Antes de qualquer tarefa
 
-## Como usar
+1. Leia `project-specs/llm-proxy/hotspots.md`.
+2. Path desconhecido → agente `scout-llm-proxy` (codemap embutido).
+3. Testes → `test-runner`. Dados reais → `db-inspector`.
+4. Diff grande → `revisor-java`.
+5. Fechamento com mudança estrutural → skill `spec-sync`.
 
-- **Antes de qualquer tarefa neste repo**, leia `hotspots.md` primeiro (mapa
-  do que é crítico) e depois os demais arquivos de docs correspondentes em
-  `project-specs/<projeto>/` — mesmo que a tarefa pareça simples, isso evita
-  reinventar nomes de tabela, contrariar uma decisão já tomada, ou perder
-  contexto de arquitetura. `decisions-archive.md` só é necessário se a tarefa
-  toca uma área com histórico de decisão fechada relevante.
-- **Ao concluir uma tarefa** que mude estrutura de pastas/tabelas, introduza
-  um termo novo de domínio, ou tome uma decisão técnica relevante, atualize
-  o arquivo correspondente em `project-specs/<projeto>/`. Resuma o que foi
-  atualizado (ou diga "nada a atualizar") antes de encerrar a sessão.
-- **Specs** vivem em `project-specs/<projeto>/specs/SPEC-<slug>.md`. São
-  implementadas na sessão principal e movidas pra `specs/done/` depois do
-  merge — a spec ativa é contexto de tarefa, a arquivada é histórico.
-- Nunca push automático — commit local, revisão manual, push manual.
+## Regras
 
-## Novo projeto
-
-Copiar `project-specs/_template/` para uma pasta nova (kebab-case) e
-preencher os 5 arquivos; criar um `AGENTS.md` neste repo apontando pra lá
-(ou rodar `project-specs/harness/sync.sh`, que gera esse arquivo).
+- Nunca push automático; commit local só se pedido.
+- Não editar este arquivo à mão — regenerar com `project-specs/harness/render.py --apply`.
+- Mapa completo do workspace: `../AGENTS.md` (raiz `~/Documents/Repo`).
