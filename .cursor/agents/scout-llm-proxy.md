@@ -1,7 +1,7 @@
 ---
 name: scout-llm-proxy
 description: "Localiza arquivos, símbolos, testes e ADRs no repo llm-proxy (java). Use antes de ler ou editar código de llm-proxy quando o path exato não é conhecido."
-model: fast
+model: composer-2.5
 readonly: true
 ---
 
