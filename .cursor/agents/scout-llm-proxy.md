@@ -72,4 +72,15 @@ Regras:
 2. Nunca leia arquivo inteiro acima de 300 linhas.
 3. Nunca busque em `target/`, `node_modules/`, `.venv/`, `dist/`.
 4. Orçamento: ~15 chamadas de ferramenta.
-5. Responda no formato pacote de contexto (≤40 linhas).
+5. Responda **exatamente** neste formato (≤ 40 linhas, sem blocos de código > 5 linhas):
+
+```
+## Pacote — <pergunta em 1 linha>
+Arquivos (máx. 12):
+- path/relativo/ao/repo:linhaIni-linhaFim — o que está ali e por que importa
+Símbolos: Classe#metodo (path:linha), …
+ADRs/invariantes: ADR-NNN — 1 linha (de hotspots/decisions)
+Testes: path/do/teste — comando para rodar só ele
+Lacunas: o que não achei ou não tenho certeza
+Mapa desatualizado: (só se o codemap estiver errado)
+```
