@@ -3,7 +3,8 @@
 Existe um repositório central de documentação técnica em
 `project-specs` (irmão deste repo), com a "fonte de verdade" de cada
 projeto pessoal (arquitetura, glossário, convenções, decisões). Ele não tem
-código, só docs.
+código, só docs. Lido nativamente via `AGENTS.md` (OpenCode, Codex, Cursor);
+Claude Code usa `CLAUDE.md` → `@AGENTS.md`.
 
 Índice completo: `project-specs/README.md`.
 
@@ -16,7 +17,6 @@ código, só docs.
 | lazy-invest-bff | `lazy-invest-bff` | `project-specs/lazyinvest-bff/` |
 | cvm-ingestor | `cvm-ingestor` | `project-specs/cvm-ingestor/` |
 | cvm-pdf-processor | `cvm-pdf-processor` | `project-specs/cvm-pdf-processor/` |
-| cvm-financial-dataset | `cvm-financial-dataset` | `project-specs/cvm-financial-dataset/` |
 | llm-proxy | `llm-proxy` | `project-specs/llm-proxy/` |
 
 Cada pasta de docs tem 5 arquivos: `hotspots.md` (arquivo/módulo → por que é

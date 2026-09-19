@@ -319,15 +319,15 @@ public class ProxyService {
     }
 
     /**
-     * Sem isto o OpenRouter roteia livremente o mesmo model id entre backends de
-     * inferência diferentes por chamada — fidelidade de tool-calling varia por backend
-     * mesmo com temperature=0.0 (DEBT-TOOLCALL-001, project-specs/lazyinvest/decisions.md).
-     * require_parameters filtra candidatos que não suportam os parâmetros pedidos (ex.:
-     * tools); allow_fallbacks evita cair silenciosamente num backend alternativo em vez de
-     * errar.
+     * Tool calling e JSON Schema precisam de suporte real do endpoint; nesses casos fixamos
+     * a compatibilidade para não deixar o OpenRouter ignorar parâmetros silenciosamente.
+     * Em geração textual comum a trava é contraproducente: parâmetros opcionais (reasoning,
+     * temperature) variam entre endpoints do mesmo modelo e podem zerar os candidatos com 404.
      */
     private void pinOpenRouterProvider(ObjectNode json) {
-        if (!json.has("provider")) {
+        boolean hasTools = json.path("tools").isArray() && !json.path("tools").isEmpty();
+        boolean hasJsonSchema = "json_schema".equals(json.path("response_format").path("type").asText());
+        if (!json.has("provider") && (hasTools || hasJsonSchema)) {
             ObjectNode provider = mapper.createObjectNode();
             provider.put("allow_fallbacks", false);
             provider.put("require_parameters", true);

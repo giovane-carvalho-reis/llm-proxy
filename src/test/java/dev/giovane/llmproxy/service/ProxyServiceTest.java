@@ -34,6 +34,7 @@ class ProxyServiceTest {
     private final AtomicReference<com.fasterxml.jackson.databind.JsonNode> lastMessages = new AtomicReference<>();
     private final AtomicReference<String> lastPath = new AtomicReference<>();
     private final AtomicReference<String> lastTemperature = new AtomicReference<>();
+    private final AtomicReference<com.fasterxml.jackson.databind.JsonNode> lastProvider = new AtomicReference<>();
     private final ObjectMapper mapper = new ObjectMapper();
 
     @BeforeEach
@@ -45,6 +46,7 @@ class ProxyServiceTest {
             var body = mapper.readTree(exchange.getRequestBody());
             lastModel.set(body.path("model").asText(null));
             lastTemperature.set(body.has("temperature") ? body.path("temperature").asText() : null);
+            lastProvider.set(body.get("provider"));
             lastMessages.set(body.path("messages"));
             byte[] response = "{\"ok\":true}".getBytes();
             exchange.getResponseHeaders().add("Content-Type", "application/json");
@@ -158,6 +160,41 @@ class ProxyServiceTest {
         service.completions("{\"messages\":[]}", "openrouter", null);
 
         assertThat(lastTemperature.get()).isEqualTo("0.0");
+    }
+
+    @Test
+    void plainOpenRouterCompletionDoesNotRequireEveryEndpointParameter() throws Exception {
+        ProxyService service = new ProxyService(props("env-key", "env-model", 0.0),
+                new LlmConfigState(), mapper);
+
+        service.completions("{\"messages\":[],\"reasoning\":{\"max_tokens\":512}}",
+                "openrouter", null);
+
+        assertThat(lastProvider.get()).isNull();
+    }
+
+    @Test
+    void toolCallingStillPinsOpenRouterToCompatibleEndpoint() throws Exception {
+        ProxyService service = new ProxyService(props("env-key", "env-model", 0.0),
+                new LlmConfigState(), mapper);
+
+        service.completions("{\"messages\":[],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"lookup\"}}]}",
+                "openrouter", null);
+
+        assertThat(lastProvider.get().path("allow_fallbacks").asBoolean()).isFalse();
+        assertThat(lastProvider.get().path("require_parameters").asBoolean()).isTrue();
+    }
+
+    @Test
+    void jsonSchemaStillPinsOpenRouterToCompatibleEndpoint() throws Exception {
+        ProxyService service = new ProxyService(props("env-key", "env-model", 0.0),
+                new LlmConfigState(), mapper);
+
+        service.completions("{\"messages\":[],\"response_format\":{\"type\":\"json_schema\"}}",
+                "openrouter", null);
+
+        assertThat(lastProvider.get().path("allow_fallbacks").asBoolean()).isFalse();
+        assertThat(lastProvider.get().path("require_parameters").asBoolean()).isTrue();
     }
 
     @Test
