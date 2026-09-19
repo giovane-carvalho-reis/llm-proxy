@@ -1,8 +1,9 @@
 ---
 name: modo-scout-llm-proxy
-description: >-
-  Executa o papel do agente scout-llm-proxy no contexto Codex (fallback §10.2).
+description: "Localiza arquivos, símbolos, testes e ADRs no repo llm-proxy (java). Use antes de ler ou editar código de llm-proxy quando o path exato não é conhecido. Use no Codex quando não houver subagente: executa no próprio contexto."
 ---
+
+<!-- GERADO por project-specs/harness/render.py — não editar -->
 
 Você é o scout do repo `llm-proxy`. Seu trabalho é **localizar**, não explicar nem corrigir.
 
@@ -39,18 +40,20 @@ gerado-em: 25895bd
 
 _Esqueleto gerado 2026-09-19 — preencher Responsabilidade e Onde fica manualmente._
 
+
 Pontos frágeis:
 # Hotspots — llm-proxy
 
 > Onde olhar primeiro antes de mexer no código. Granularidade de arquivo/módulo, não classe.
 
-- `src/main/java/dev/giovane/llmproxy/service/ProxyService.java` — 455 linhas, quase todo o comportamento do serviço: roteamento local/OpenRouter, bifurcação streaming vs. não-streaming (ADR-012), override de `temperature…
-- `llama-swap.yaml` — **fora do container e fora do Java**, mas é onde vive metade das decisões deste projeto: `-b/-ub` dos embeddings (ADR-002), `--cache-ram 0` (ADR-003), `--reasoning off` (ADR-007), `-ngl` por modelo (…
-- `systemd/llama-swap.service` + `bge-m3-recycle.timer` — `MemoryMax=16G` com margem apertada sob chat+embeddings concorrentes (ADR-004). Existe em duas cópias que precisam ficar sincronizadas: a do repo e a deployed em `…
-- `docker-compose.yml` (`LOCAL_LLAMA_URL`/`EMBED_URL`/`RERANK_URL`) — sem essas env vars o container resolve `localhost:8080` como ele mesmo, e o caller cai em fallback **sem erro visível** (ADR-005). Todo upstream novo p…
+- `src/main/java/dev/giovane/llmproxy/service/ProxyService.java` — 455 linhas, quase todo o comportamento do serviço: roteamento local/OpenRouter, bifurcação streaming vs. não-streaming (ADR-012), override de `temperature` (ADR-010), log por request (ADR-011). Qualquer mudança aqui atinge todos os callers de uma vez.
+- `llama-swap.yaml` — **fora do container e fora do Java**, mas é onde vive metade das decisões deste projeto: `-b/-ub` dos embeddings (ADR-002), `--cache-ram 0` (ADR-003), `--reasoning off` (ADR-007), `-ngl` por modelo (ADR-006/008/009). Editar sem medir `-ngl` no hardware real quebra o load do modelo.
+- `systemd/llama-swap.service` + `bge-m3-recycle.timer` — `MemoryMax=16G` com margem apertada sob chat+embeddings concorrentes (ADR-004). Existe em duas cópias que precisam ficar sincronizadas: a do repo e a deployed em `~/.config/systemd/user/`.
+- `docker-compose.yml` (`LOCAL_LLAMA_URL`/`EMBED_URL`/`RERANK_URL`) — sem essas env vars o container resolve `localhost:8080` como ele mesmo, e o caller cai em fallback **sem erro visível** (ADR-005). Todo upstream novo precisa da sua.
 - `src/main/java/dev/giovane/llmproxy/config/AdminTokenInterceptor.java` — proteção fail-closed de `/v1/config/**`; token vazio/ausente é o caso de borda que já teve teste dedicado (`AdminTokenInterceptorEmptyTokenTest`).
 - `src/main/java/dev/giovane/llmproxy/config/LlmConfigState.java` — config mutável em memória (`AtomicReference`); é o que faz o upstream efetivo mudar em runtime, então bug aqui muda o backend de todo mundo sem deploy.
 - `scripts/setup-llama-swap.sh` + `LLAMA_SERVER_BIN`/`LD_LIBRARY_PATH` — setup específico da máquina (ADR-001); são os pontos a revisar ao migrar de workstation.
+
 
 Regras:
 1. Comece pelo mapa. Só use Grep/Glob para confirmar ou achar o que o mapa não cobre.
