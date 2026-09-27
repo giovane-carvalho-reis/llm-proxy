@@ -383,6 +383,28 @@ public class ProxyService {
      * from the upstream's own OpenAI-shaped "usage" object; missing on some llama.cpp builds,
      * so 0 there just means "not reported", not "zero tokens".
      */
+    /** Best-effort usage extraction from SSE bodies that include an OpenAI-shaped usage object. */
+    private void logStreamSummary(String target, ObjectNode request, String sseBody, int status, long latencyMs) {
+        int prompt = 0;
+        int completion = 0;
+        int idx = sseBody.lastIndexOf("\"usage\"");
+        if (idx >= 0) {
+            int brace = sseBody.indexOf('{', idx);
+            int end = sseBody.indexOf('}', brace);
+            if (brace >= 0 && end > brace) {
+                try {
+                    JsonNode usage = mapper.readTree(sseBody.substring(brace, end + 1));
+                    prompt = usage.path("prompt_tokens").asInt(0);
+                    completion = usage.path("completion_tokens").asInt(0);
+                } catch (Exception ignored) {
+                    // upstream chunk malformed — keep zeros
+                }
+            }
+        }
+        log.info("chat route={} model={} status={} latencyMs={} promptTokens={} completionTokens={} (stream)",
+                target, request.path("model").asText("?"), status, latencyMs, prompt, completion);
+    }
+
     private void logRequestSummary(String target, ObjectNode request, JsonNode resp, int status, long latencyMs) {
         JsonNode usage = resp.path("usage");
         // "timings" é o mesmo campo lido por logDraftAcceptance — builds sem --spec-type draft-mtp
@@ -474,9 +496,7 @@ public class ProxyService {
                 }
             });
             StreamingResponseBody streamBody = out -> {
-                // Can't parse token/usage counts out of an SSE body (see completions()'s
-                // non-streaming branch for that) — log what's available without pretending to
-                // have counts this path structurally can't produce.
+                StringBuilder sseBuffer = new StringBuilder();
                 try {
                     try (InputStream in = res.getBody()) {
                         byte[] buf = new byte[512];
@@ -484,6 +504,7 @@ public class ProxyService {
                         while ((n = in.read(buf)) != -1) {
                             out.write(buf, 0, n);
                             out.flush(); // each SSE event must reach the client as it arrives, not batched
+                            sseBuffer.append(new String(buf, 0, n, java.nio.charset.StandardCharsets.UTF_8));
                         }
                     }
                 } catch (IOException clientGone) {
@@ -495,8 +516,7 @@ public class ProxyService {
                     log.debug("[chat-stream] client disconnected mid-stream | route={} model={}",
                             target, request.path("model").asText("?"), clientGone);
                 } finally {
-                    log.info("chat route={} model={} status={} latencyMs={} (stream)",
-                            target, request.path("model").asText("?"), res.getStatusCode().value(),
+                    logStreamSummary(target, request, sseBuffer.toString(), res.getStatusCode().value(),
                             System.currentTimeMillis() - startedAt);
                 }
             };

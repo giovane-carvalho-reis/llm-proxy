@@ -35,6 +35,7 @@ class ProxyServiceTest {
     private final AtomicReference<String> lastPath = new AtomicReference<>();
     private final AtomicReference<String> lastTemperature = new AtomicReference<>();
     private final AtomicReference<com.fasterxml.jackson.databind.JsonNode> lastProvider = new AtomicReference<>();
+    private final AtomicReference<String> lastToolChoice = new AtomicReference<>();
     private final ObjectMapper mapper = new ObjectMapper();
 
     @BeforeEach
@@ -47,6 +48,7 @@ class ProxyServiceTest {
             lastModel.set(body.path("model").asText(null));
             lastTemperature.set(body.has("temperature") ? body.path("temperature").asText() : null);
             lastProvider.set(body.get("provider"));
+            lastToolChoice.set(body.has("tool_choice") ? body.path("tool_choice").asText() : null);
             lastMessages.set(body.path("messages"));
             byte[] response = "{\"ok\":true}".getBytes();
             exchange.getResponseHeaders().add("Content-Type", "application/json");
@@ -240,7 +242,7 @@ class ProxyServiceTest {
     @Test
     void completionsWithStreamTrueReturnsStreamingResponseBodyThatCopiesBytesAsIs() throws Exception {
         String sseBody = "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n"
-                + "data: {\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"b\"}}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3}}\n\n"
                 + "data: [DONE]\n\n";
         upstream.removeContext("/v1/chat/completions");
         upstream.createContext("/v1/chat/completions", exchange -> {
@@ -379,6 +381,20 @@ class ProxyServiceTest {
         assertThat(lastMessages.get().get(0).path("content").asText()).startsWith(GUARDRAIL_MARKER);
         // The caller's original multimodal system message is preserved untouched, one slot later.
         assertThat(lastMessages.get().get(1).path("content").isArray()).isTrue();
+    }
+
+    @Test
+    void completionsForwardsToolChoiceUnchanged() throws Exception {
+        ProxyProperties props = props("env-key", "env-model");
+        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+
+        service.completions(
+                "{\"messages\":[{\"role\":\"user\",\"content\":\"busque ROE\"}],"
+                        + "\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"get_financials\"}}],"
+                        + "\"tool_choice\":\"auto\"}",
+                "openrouter", null);
+
+        assertThat(lastToolChoice.get()).isEqualTo("auto");
     }
 
     @Test
