@@ -54,4 +54,7 @@ llm-proxy:
   admin-token: ${LLM_PROXY_ADMIN_TOKEN:}
   # Chat-capable ids from llama-swap.yaml's "chat" group (see /v1/models/chat) — llama-swap's
   # own /v1/models doesn't expose group membership, so this is the only source of truth.
+  # Modelos OpenRouter que recusam `temperature` (raciocínio da OpenAI): a temperatura forçada acima não é
+  # injetada neles. Com tools, o proxy fixa require_parameters e um parâmetro recusado vira 404.
+  openrouter-models-without-temperature: ${OPENROUTER_MODELS_WITHOUT_TEMPERATURE:openai/gpt-5,openai/gpt-6,openai/o1,openai/o3,openai/o4}
   local-chat-models: ${LOCAL_CHAT_MODELS:qwen3-14b,qwen3.6-35b,qwen3.8-27b,qwen3.8-27b-iq4xs,qwen3.5-9b,gemma-4-26b}

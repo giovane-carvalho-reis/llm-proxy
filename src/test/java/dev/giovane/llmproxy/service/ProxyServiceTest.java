@@ -102,7 +102,7 @@ class ProxyServiceTest {
     private ProxyProperties props(String envApiKey, String envModel, Double temperature) {
         ProxyProperties.Upstream up = new ProxyProperties.Upstream(baseUrl(), envApiKey, envModel, temperature);
         return new ProxyProperties(up, up, up, up, new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "",
-                java.util.List.of("qwen3-14b", "qwen3.6-35b", "qwen3.8-27b"));
+                java.util.List.of("qwen3-14b", "qwen3.6-35b", "qwen3.8-27b"), java.util.List.of("openai/gpt-6"));
     }
 
     @Test
@@ -137,6 +137,28 @@ class ProxyServiceTest {
         ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
 
         service.completions("{\"messages\":[],\"temperature\":1.5}", "openrouter", null);
+
+        assertThat(lastTemperature.get()).isEqualTo("0.0");
+    }
+
+    /** gpt-6-luna recusa temperature: com tools o proxy exige require_parameters, então injetá-la dava 404. */
+    @Test
+    void completionsDropsTemperatureForOpenRouterModelsThatRejectIt() throws Exception {
+        ProxyProperties props = props("env-key", "env-model", 0.0);
+        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+
+        service.completions("{\"model\":\"openai/gpt-6-luna\",\"messages\":[],\"temperature\":0.3,"
+                + "\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"x\"}}]}", "openrouter", null);
+
+        assertThat(lastTemperature.get()).isNull();
+    }
+
+    @Test
+    void otherOpenRouterModelsStillGetTheForcedTemperature() throws Exception {
+        ProxyProperties props = props("env-key", "env-model", 0.0);
+        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+
+        service.completions("{\"model\":\"openai/gpt-4o-mini\",\"messages\":[]}", "openrouter", null);
 
         assertThat(lastTemperature.get()).isEqualTo("0.0");
     }

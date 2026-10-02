@@ -105,7 +105,11 @@ public class ProxyService {
         // Fill in the backend's default model when the caller didn't pin one — the whole point
         // of "auto" is that the caller doesn't know which backend (and thus which model id) runs.
         fillDefaultModel(json, up);
-        if (up.temperature() != null) {
+        boolean temperatureUnsupported = Router.OPENROUTER.equals(target)
+                && props.rejectsTemperature(json.path("model").asText(null));
+        if (temperatureUnsupported) {
+            json.remove("temperature"); // nem a do chamador: com require_parameters, zeraria os endpoints
+        } else if (up.temperature() != null) {
             json.put("temperature", up.temperature());
         }
         if (Router.OPENROUTER.equals(target)) {

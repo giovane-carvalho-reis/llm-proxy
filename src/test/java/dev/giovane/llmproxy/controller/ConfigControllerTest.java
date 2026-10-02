@@ -31,7 +31,7 @@ class ConfigControllerTest {
     @BeforeEach
     void setUp() {
         props = new ProxyProperties(LLAMA_CPP, OPENROUTER, EMBEDDINGS, EMBEDDINGS,
-                new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "admin-token", java.util.List.of());
+                new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "admin-token", java.util.List.of(), java.util.List.of());
         configState = new LlmConfigState();
         controller = new ConfigController(props, configState);
     }
@@ -51,7 +51,7 @@ class ConfigControllerTest {
         ProxyProperties propsNoKey = new ProxyProperties(LLAMA_CPP,
                 new ProxyProperties.Upstream(OPENROUTER.baseUrl(), null, OPENROUTER.defaultModel(), null),
                 EMBEDDINGS, EMBEDDINGS, new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "admin-token",
-                java.util.List.of());
+                java.util.List.of(), java.util.List.of());
         ConfigController noKeyController = new ConfigController(propsNoKey, configState);
 
         ConfigController.ConfigView view = noKeyController.get();
