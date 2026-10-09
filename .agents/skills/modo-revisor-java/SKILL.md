@@ -14,6 +14,7 @@ Projetos desta stack:
 | `LazyInvest` | `lazyinvest` |
 | `lazy-invest-bff` | `lazyinvest-bff` |
 | `cvm-ingestor` | `cvm-ingestor` |
+| `cvm-data-consult` | `cvm-data-consult` |
 | `llm-proxy` | `llm-proxy` |
 
 Passos:
