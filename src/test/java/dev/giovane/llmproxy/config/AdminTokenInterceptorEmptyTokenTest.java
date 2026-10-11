@@ -36,7 +36,7 @@ class AdminTokenInterceptorEmptyTokenTest {
 
     @Test
     void emptyAdminTokenDeniesAccessEvenWithAnyHeader() throws Exception {
-        mockMvc.perform(put("/v1/config")
+        mockMvc.perform(put("/v1/config").header("X-Internal-Token", "test-internal-token")
                         .header("X-Admin-Token", "anything")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))

@@ -44,13 +44,13 @@ class AdminTokenInterceptorTest {
 
     @Test
     void putConfigWithoutHeaderIsForbidden() throws Exception {
-        mockMvc.perform(put("/v1/config").contentType(MediaType.APPLICATION_JSON).content("{}"))
+        mockMvc.perform(put("/v1/config").header("X-Internal-Token", "test-internal-token").contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isForbidden());
     }
 
     @Test
     void putConfigWithWrongHeaderIsForbidden() throws Exception {
-        mockMvc.perform(put("/v1/config")
+        mockMvc.perform(put("/v1/config").header("X-Internal-Token", "test-internal-token")
                         .header("X-Admin-Token", "wrong-token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
@@ -59,7 +59,7 @@ class AdminTokenInterceptorTest {
 
     @Test
     void putConfigWithCorrectHeaderIsAllowed() throws Exception {
-        mockMvc.perform(put("/v1/config")
+        mockMvc.perform(put("/v1/config").header("X-Internal-Token", "test-internal-token")
                         .header("X-Admin-Token", "correct-token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
@@ -71,7 +71,7 @@ class AdminTokenInterceptorTest {
         StreamingResponseBody emptyBody = out -> { };
         when(proxyService.completions(anyString(), anyString(), any())).thenReturn(ResponseEntity.ok(emptyBody));
 
-        mockMvc.perform(post("/v1/chat/completions")
+        mockMvc.perform(post("/v1/chat/completions").header("X-Internal-Token", "test-internal-token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isOk());
@@ -79,6 +79,6 @@ class AdminTokenInterceptorTest {
 
     @Test
     void getConfigIsAlsoForbiddenWithoutHeader() throws Exception {
-        mockMvc.perform(get("/v1/config")).andExpect(status().isForbidden());
+        mockMvc.perform(get("/v1/config").header("X-Internal-Token", "test-internal-token")).andExpect(status().isForbidden());
     }
 }
