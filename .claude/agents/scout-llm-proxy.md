@@ -2,7 +2,7 @@
 name: scout-llm-proxy
 description: "Localiza arquivos, símbolos, testes e ADRs no repo llm-proxy (java). Use antes de ler ou editar código de llm-proxy quando o path exato não é conhecido."
 tools: Read, Grep, Glob
-model: haiku
+model: claude-haiku-5-5
 ---
 
 <!-- GERADO por project-specs/harness/render.py — não editar -->
