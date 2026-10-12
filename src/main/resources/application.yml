@@ -31,6 +31,11 @@ llm-proxy:
     # Same override as llama-cpp above, applied to OpenRouter requests — same effect on
     # LazyInvest's OpenRouter path (its openrouter.temperature is likewise discarded).
     temperature: ${OPENROUTER_TEMPERATURE:0.0}
+    # SPEC-chat-custo-de-contexto D13: injeta usage.include / stream_options.include_usage para o
+    # log trazer tokens, cached e custo reais. Nunca sobrescreve o valor do chamador.
+    usage-accounting: ${OPENROUTER_USAGE_ACCOUNTING:true}
+    # D11/D13: marca cache_control (ephemeral) no system e na última mensagem user de modelos anthropic/*.
+    prompt-cache: ${OPENROUTER_PROMPT_CACHE:true}
   embeddings:
     # bge-m3 via llama-swap (grupo "embeddings", CPU/RAM): sobe sob demanda e convive
     # com o modelo de chat carregado — ninguém mais gerencia processo de embed.

@@ -36,6 +36,7 @@ class ProxyServiceTest {
     private final AtomicReference<String> lastTemperature = new AtomicReference<>();
     private final AtomicReference<com.fasterxml.jackson.databind.JsonNode> lastProvider = new AtomicReference<>();
     private final AtomicReference<String> lastToolChoice = new AtomicReference<>();
+    private final AtomicReference<com.fasterxml.jackson.databind.JsonNode> lastBody = new AtomicReference<>();
     private final ObjectMapper mapper = new ObjectMapper();
 
     @BeforeEach
@@ -45,6 +46,7 @@ class ProxyServiceTest {
             lastAuthHeader.set(exchange.getRequestHeaders().getFirst("Authorization"));
             lastPath.set(exchange.getRequestURI().getPath());
             var body = mapper.readTree(exchange.getRequestBody());
+            lastBody.set(body);
             lastModel.set(body.path("model").asText(null));
             lastTemperature.set(body.has("temperature") ? body.path("temperature").asText() : null);
             lastProvider.set(body.get("provider"));
@@ -431,5 +433,231 @@ class ProxyServiceTest {
 
         assertThat(lastMessages.get()).hasSize(1);
         assertThat(lastMessages.get().get(0).path("role").asText()).isEqualTo("user");
+    }
+
+    private ProxyProperties openrouterProps(Boolean usageAccounting) {
+        ProxyProperties.Upstream up = new ProxyProperties.Upstream(baseUrl(), "k", "anthropic/claude-haiku-5.5", 0.0,
+                usageAccounting, null);
+        return new ProxyProperties(up, up, up, up, new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "",
+                java.util.List.of("qwen3-14b"), java.util.List.of());
+    }
+
+    @Test
+    void openRouterRequestAsksForUsageAccountingAndStreamUsage() throws Exception {
+        ProxyService service = new ProxyService(openrouterProps(null), new LlmConfigState(), mapper);
+
+        service.completions("{\"messages\":[],\"stream\":true}", "openrouter", null)
+                .getBody().writeTo(new ByteArrayOutputStream());
+
+        assertThat(lastBody.get().path("usage").path("include").asBoolean()).isTrue();
+        assertThat(lastBody.get().path("stream_options").path("include_usage").asBoolean()).isTrue();
+    }
+
+    @Test
+    void usageAccountingKeepsCallerValuesAndSkipsStreamOptionsWithoutStream() throws Exception {
+        ProxyService service = new ProxyService(openrouterProps(null), new LlmConfigState(), mapper);
+
+        service.completions("{\"messages\":[],\"usage\":{\"include\":false}}", "openrouter", null);
+
+        assertThat(lastBody.get().path("usage").path("include").asBoolean()).isFalse();
+        assertThat(lastBody.get().has("stream_options")).isFalse();
+    }
+
+    @Test
+    void usageAccountingIsNotInjectedOnLocalRouteOrWhenToggledOff() throws Exception {
+        new ProxyService(props("k", "m"), new LlmConfigState(), mapper)
+                .completions("{\"messages\":[]}", "local", null);
+        assertThat(lastBody.get().has("usage")).isFalse();
+
+        new ProxyService(openrouterProps(false), new LlmConfigState(), mapper)
+                .completions("{\"messages\":[]}", "openrouter", null);
+        assertThat(lastBody.get().has("usage")).isFalse();
+    }
+
+    @Test
+    void streamLogReadsNestedUsageFromLastEventWithUsage() throws Exception {
+        String sse = new String(getClass().getResourceAsStream("/fixtures/openrouter-usage-stream.sse")
+                .readAllBytes(), StandardCharsets.UTF_8);
+        upstream.removeContext("/v1/chat/completions");
+        upstream.createContext("/v1/chat/completions", exchange -> {
+            byte[] response = sse.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ProxyService.class);
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            new ProxyService(openrouterProps(null), new LlmConfigState(), mapper)
+                    .completions("{\"messages\":[],\"stream\":true}", "openrouter", null)
+                    .getBody().writeTo(new ByteArrayOutputStream());
+        } finally {
+            logger.detachAppender(appender);
+        }
+        assertThat(appender.list.stream().map(e -> e.getFormattedMessage()))
+                .anyMatch(m -> m.contains("promptTokens=1154") && m.contains("completionTokens=4")
+                        && m.contains("cachedTokens=0") && m.contains("cost=0.0001174"));
+    }
+
+    @Test
+    void nonStreamLogShowsNotAvailableWhenUpstreamOmitsCachedAndCost() throws Exception {
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ProxyService.class);
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            new ProxyService(props("k", "m"), new LlmConfigState(), mapper)
+                    .completions("{\"messages\":[]}", "local", null);
+        } finally {
+            logger.detachAppender(appender);
+        }
+        assertThat(appender.list.stream().map(e -> e.getFormattedMessage()))
+                .anyMatch(m -> m.contains("cachedTokens=n/d") && m.contains("cost=n/d"));
+    }
+
+    /** SPEC-chat-backlog C.C2: backend fora no caminho stream também gera o alarme "backend indisponível". */
+    @Test
+    void streamWithBackendDownLogsBackendUnavailable() throws Exception {
+        String deadUrl = baseUrl();
+        upstream.stop(0);
+        ProxyProperties.Upstream up = new ProxyProperties.Upstream(deadUrl, "k", "m", null);
+        ProxyService service = new ProxyService(new ProxyProperties(up, up, up, up,
+                new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "", java.util.List.of(), java.util.List.of()),
+                new LlmConfigState(), mapper);
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ProxyService.class);
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                    service.completions("{\"messages\":[],\"stream\":true}", "local", null))
+                    .isInstanceOf(org.springframework.web.client.ResourceAccessException.class);
+        } finally {
+            logger.detachAppender(appender);
+        }
+        assertThat(appender.list.stream().map(e -> e.getFormattedMessage()))
+                .anyMatch(m -> m.startsWith("backend indisponível"));
+    }
+
+    /** SPEC-chat-backlog C.I3/C.M4: só a linha de usage é lida, com multibyte íntegro, e o provider do stream vai ao log. */
+    @Test
+    void streamSummaryReadsTheUsageLineAndTheOpenRouterProvider() throws Exception {
+        String sse = "data: {\"choices\":[{\"delta\":{\"content\":\"ação\"}}]}\n\n"
+                + "data: {\"provider\":\"Anthropic\",\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":2}}\n\n"
+                + "data: [DONE]\n\n";
+        upstream.removeContext("/v1/chat/completions");
+        upstream.createContext("/v1/chat/completions", exchange -> {
+            byte[] response = sse.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ProxyService.class);
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            new ProxyService(openrouterProps(null), new LlmConfigState(), mapper)
+                    .completions("{\"messages\":[],\"stream\":true}", "openrouter", null)
+                    .getBody().writeTo(new ByteArrayOutputStream());
+        } finally {
+            logger.detachAppender(appender);
+        }
+        assertThat(appender.list.stream().map(e -> e.getFormattedMessage()))
+                .anyMatch(m -> m.contains("promptTokens=7") && m.contains("completionTokens=2"))
+                .anyMatch(m -> m.contains("provider=Anthropic") && m.contains("(stream)"));
+    }
+
+    /** SPEC-chat-backlog C.I4: tools e conteúdo em partes entram na estimativa que decide o roteamento. */
+    @Test
+    void estimateTokensCountsToolsAndMultipartContent() throws Exception {
+        String bigDescription = "x".repeat(40_000);
+        var json = mapper.readTree("{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\""
+                + "y".repeat(400) + "\"}]}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"t\","
+                + "\"description\":\"" + bigDescription + "\"}}]}");
+
+        int tokens = ProxyService.estimateTokens(json);
+
+        assertThat(tokens).isGreaterThan(8000); // cruza o speed-token-threshold padrão
+        assertThat(ProxyService.estimateTokens(mapper.readTree("{\"messages\":[{\"content\":[{\"type\":\"text\","
+                + "\"text\":\"abcdefgh\"}]}]}"))).isEqualTo(2);
+    }
+
+    private ProxyService cacheService(Boolean promptCache) {
+        ProxyProperties.Upstream up = new ProxyProperties.Upstream(baseUrl(), "k", "anthropic/claude-haiku-5.5", 0.0,
+                null, promptCache);
+        return new ProxyService(new ProxyProperties(up, up, up, up,
+                new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "", java.util.List.of(),
+                java.util.List.of()), new LlmConfigState(), mapper);
+    }
+
+    private static final String CHAT_WITH_TOOL_TURN = "{\"model\":\"anthropic/claude-haiku-5.5\",\"messages\":["
+            + "{\"role\":\"system\",\"content\":\"regras\"},"
+            + "{\"role\":\"user\",\"content\":\"antiga\"},{\"role\":\"assistant\",\"content\":\"ok\"},"
+            + "{\"role\":\"user\",\"content\":\"pergunta\"},"
+            + "{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"1\",\"type\":\"function\","
+            + "\"function\":{\"name\":\"f\",\"arguments\":\"{}\"}}]},"
+            + "{\"role\":\"tool\",\"tool_call_id\":\"1\",\"content\":\"dado\"}]}";
+
+    @Test
+    void promptCacheMarksSystemAndLastUserOnlyForAnthropicOnOpenRouter() throws Exception {
+        cacheService(null).completions(CHAT_WITH_TOOL_TURN, "openrouter", null);
+
+        var msgs = lastBody.get().path("messages");
+        // guardrail é mesclado no system existente: continua sendo a mensagem 0
+        var system = msgs.get(0).path("content");
+        assertThat(system.isArray()).isTrue();
+        assertThat(system.get(0).path("cache_control").path("type").asText()).isEqualTo("ephemeral");
+        assertThat(system.get(0).path("text").asText()).endsWith("regras");
+        assertThat(msgs.get(1).path("content").isTextual()).isTrue(); // user antigo intacto
+        assertThat(msgs.get(3).path("content").get(0).path("cache_control").path("type").asText())
+                .isEqualTo("ephemeral");
+        assertThat(msgs.get(3).path("content").get(0).path("text").asText()).isEqualTo("pergunta");
+        assertThat(msgs.get(4).has("cache_control")).isFalse();
+        assertThat(msgs.get(5).path("content").asText()).isEqualTo("dado"); // tool intacta
+    }
+
+    @Test
+    void promptCacheSkipsNonAnthropicModelsLocalRouteAndToggleOff() throws Exception {
+        cacheService(null).completions(CHAT_WITH_TOOL_TURN.replace("anthropic/claude-haiku-5.5", "openai/gpt-4o-mini"),
+                "openrouter", null);
+        assertThat(lastBody.get().toString()).doesNotContain("cache_control");
+
+        cacheService(null).completions(CHAT_WITH_TOOL_TURN, "local", null);
+        assertThat(lastBody.get().toString()).doesNotContain("cache_control");
+
+        cacheService(false).completions(CHAT_WITH_TOOL_TURN, "openrouter", null);
+        assertThat(lastBody.get().toString()).doesNotContain("cache_control");
+    }
+
+    @Test
+    void promptCachePreservesCallerCacheControl() throws Exception {
+        String body = "{\"model\":\"anthropic/claude-haiku-5.5\",\"messages\":["
+                + "{\"role\":\"system\",\"content\":\"s\"},"
+                + "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"q\","
+                + "\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}]}]}";
+
+        cacheService(null).completions(body, "openrouter", null);
+
+        var msgs = lastBody.get().path("messages");
+        assertThat(msgs.get(0).path("content").isTextual()).isTrue();
+        assertThat(msgs.get(1).path("content").get(0).path("cache_control").path("ttl").asText()).isEqualTo("1h");
+    }
+
+    @Test
+    void promptCacheMarksLastPartOfExistingContentArray() throws Exception {
+        String body = "{\"model\":\"anthropic/claude-haiku-5.5\",\"messages\":["
+                + "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\"},"
+                + "{\"type\":\"text\",\"text\":\"b\"}]}]}";
+
+        cacheService(null).completions(body, "openrouter", null);
+
+        var parts = lastBody.get().path("messages").get(1).path("content"); // 0 = guardrail inserido
+        assertThat(parts.get(0).has("cache_control")).isFalse();
+        assertThat(parts.get(1).path("cache_control").path("type").asText()).isEqualTo("ephemeral");
     }
 }

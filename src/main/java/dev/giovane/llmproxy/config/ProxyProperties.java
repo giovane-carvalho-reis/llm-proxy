@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.List;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 /**
  * Upstream backends and routing knobs. Both backends speak the OpenAI dialect,
@@ -26,7 +27,25 @@ public record ProxyProperties(Upstream llamaCpp, Upstream openrouter, Upstream e
                 && openrouterModelsWithoutTemperature.stream().anyMatch(p -> !p.isBlank() && model.startsWith(p.trim()));
     }
 
-    public record Upstream(String baseUrl, String apiKey, String defaultModel, Double temperature) {
+    /** usageAccounting/promptCache: toggles só do upstream openrouter (null = ligado). */
+    public record Upstream(String baseUrl, String apiKey, String defaultModel, Double temperature,
+            Boolean usageAccounting, Boolean promptCache) {
+
+        @ConstructorBinding
+        public Upstream {
+        }
+
+        public Upstream(String baseUrl, String apiKey, String defaultModel, Double temperature) {
+            this(baseUrl, apiKey, defaultModel, temperature, null, null);
+        }
+
+        public boolean usageAccountingEnabled() {
+            return usageAccounting == null || usageAccounting;
+        }
+
+        public boolean promptCacheEnabled() {
+            return promptCache == null || promptCache;
+        }
     }
 
     /** speedTokenThreshold: in "auto", a speed-hinted request bigger than this stays local. */

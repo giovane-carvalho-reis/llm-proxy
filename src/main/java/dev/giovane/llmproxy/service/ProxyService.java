@@ -114,6 +114,12 @@ public class ProxyService {
         }
         if (Router.OPENROUTER.equals(target)) {
             pinOpenRouterProvider(json);
+            if (up.usageAccountingEnabled()) {
+                injectUsageAccounting(json);
+            }
+            if (up.promptCacheEnabled()) {
+                injectPromptCache(json);
+            }
         }
         String payload = mapper.writeValueAsString(json);
 
@@ -339,6 +345,82 @@ public class ProxyService {
         }
     }
 
+    /**
+     * Pede à OpenRouter tokens/cached/custo reais (sondado 2026-10-10: 200 com tools + require_parameters,
+     * stream e não-stream). Nunca sobrescreve o que o chamador mandou.
+     */
+    private void injectUsageAccounting(ObjectNode json) {
+        if (!json.has("usage")) {
+            json.putObject("usage").put("include", true);
+        }
+        if (json.path("stream").asBoolean(false) && !json.has("stream_options")) {
+            json.putObject("stream_options").put("include_usage", true);
+        }
+    }
+
+    /**
+     * Prompt caching da Anthropic via OpenRouter (D11): breakpoint no {@code system} e na última
+     * mensagem {@code user}, então tools + system + histórico + pergunta viram prefixo reaproveitado
+     * nas iterações seguintes do loop de tools. Nunca em {@code tool}/{@code assistant}; não mexe se o
+     * chamador já trouxe algum {@code cache_control}.
+     */
+    private void injectPromptCache(ObjectNode json) {
+        if (!json.path("model").asText("").startsWith("anthropic/")
+                || !(json.get("messages") instanceof ArrayNode messages) || hasCacheControl(messages)) {
+            return;
+        }
+        ObjectNode system = null;
+        ObjectNode lastUser = null;
+        for (JsonNode m : messages) {
+            if (!(m instanceof ObjectNode msg)) {
+                continue;
+            }
+            String role = msg.path("role").asText("");
+            if ("system".equals(role) && system == null) {
+                system = msg;
+            } else if ("user".equals(role)) {
+                lastUser = msg;
+            }
+        }
+        markCacheBreakpoint(system);
+        markCacheBreakpoint(lastUser);
+    }
+
+    private static boolean hasCacheControl(ArrayNode messages) {
+        for (JsonNode m : messages) {
+            if (m.has("cache_control")) {
+                return true;
+            }
+            JsonNode content = m.get("content");
+            if (content != null && content.isArray()) {
+                for (JsonNode part : content) {
+                    if (part.has("cache_control")) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private void markCacheBreakpoint(ObjectNode message) {
+        if (message == null) {
+            return;
+        }
+        JsonNode content = message.get("content");
+        if (content != null && content.isTextual() && !content.asText().isBlank()) {
+            ArrayNode parts = mapper.createArrayNode();
+            ObjectNode part = parts.addObject();
+            part.put("type", "text");
+            part.put("text", content.asText());
+            part.putObject("cache_control").put("type", "ephemeral");
+            message.set("content", parts);
+        } else if (content != null && content.isArray() && !content.isEmpty()
+                && content.get(content.size() - 1) instanceof ObjectNode last) {
+            last.putObject("cache_control").put("type", "ephemeral");
+        }
+    }
+
     /** Best-effort: never lets a parse failure surface, response body already parsed once. */
     private JsonNode parseResponseBody(ResponseEntity<String> response) {
         if (response.getBody() == null) {
@@ -387,26 +469,37 @@ public class ProxyService {
      * from the upstream's own OpenAI-shaped "usage" object; missing on some llama.cpp builds,
      * so 0 there just means "not reported", not "zero tokens".
      */
-    /** Best-effort usage extraction from SSE bodies that include an OpenAI-shaped usage object. */
-    private void logStreamSummary(String target, ObjectNode request, String sseBody, int status, long latencyMs) {
-        int prompt = 0;
-        int completion = 0;
-        int idx = sseBody.lastIndexOf("\"usage\"");
-        if (idx >= 0) {
-            int brace = sseBody.indexOf('{', idx);
-            int end = sseBody.indexOf('}', brace);
-            if (brace >= 0 && end > brace) {
-                try {
-                    JsonNode usage = mapper.readTree(sseBody.substring(brace, end + 1));
-                    prompt = usage.path("prompt_tokens").asInt(0);
-                    completion = usage.path("completion_tokens").asInt(0);
-                } catch (Exception ignored) {
-                    // upstream chunk malformed — keep zeros
-                }
+    /** Best-effort usage extraction from SSE bodies: último evento {@code data:} com objeto {@code usage}. */
+    private void logStreamSummary(String target, ObjectNode request, String usageLine, int status, long latencyMs) {
+        JsonNode chunk = com.fasterxml.jackson.databind.node.MissingNode.getInstance();
+        if (usageLine != null) {
+            try {
+                chunk = mapper.readTree(usageLine.substring(5).trim());
+            } catch (Exception ignored) {
+                // chunk malformado — loga sem usage
             }
         }
-        log.info("chat route={} model={} status={} latencyMs={} promptTokens={} completionTokens={} (stream)",
-                target, request.path("model").asText("?"), status, latencyMs, prompt, completion);
+        JsonNode usage = chunk.path("usage").isObject() ? chunk.path("usage")
+                : com.fasterxml.jackson.databind.node.MissingNode.getInstance();
+        if (Router.OPENROUTER.equals(target) && chunk.has("provider")) {
+            // SPEC-chat-backlog C.M4: o ramo stream retorna antes de logOpenRouterProvider.
+            log.info("openrouter model={} provider={} (stream)", request.path("model").asText("?"),
+                    chunk.path("provider").asText("?"));
+        }
+        log.info("chat route={} model={} status={} latencyMs={} promptTokens={} completionTokens={} cachedTokens={} cost={} (stream)",
+                target, request.path("model").asText("?"), status, latencyMs,
+                usage.path("prompt_tokens").asInt(0), usage.path("completion_tokens").asInt(0),
+                cachedTokens(usage), cost(usage));
+    }
+
+    private static String cachedTokens(JsonNode usage) {
+        JsonNode n = usage.path("prompt_tokens_details").path("cached_tokens");
+        return n.isNumber() ? String.valueOf(n.asLong()) : "n/d";
+    }
+
+    private static String cost(JsonNode usage) {
+        JsonNode n = usage.path("cost");
+        return n.isNumber() ? n.decimalValue().toPlainString() : "n/d";
     }
 
     private void logRequestSummary(String target, ObjectNode request, JsonNode resp, int status, long latencyMs) {
@@ -417,10 +510,10 @@ public class ProxyService {
         JsonNode timings = resp.path("timings");
         String promptMs = timings.has("prompt_ms") ? String.valueOf(timings.path("prompt_ms").asDouble()) : "n/d";
         String predictedMs = timings.has("predicted_ms") ? String.valueOf(timings.path("predicted_ms").asDouble()) : "n/d";
-        log.info("chat route={} model={} status={} latencyMs={} promptTokens={} completionTokens={} promptMs={} predictedMs={}",
+        log.info("chat route={} model={} status={} latencyMs={} promptTokens={} completionTokens={} cachedTokens={} cost={} promptMs={} predictedMs={}",
                 target, request.path("model").asText("?"), status, latencyMs,
                 usage.path("prompt_tokens").asInt(0), usage.path("completion_tokens").asInt(0),
-                promptMs, predictedMs);
+                cachedTokens(usage), cost(usage), promptMs, predictedMs);
     }
 
     private static void fillDefaultModel(ObjectNode json, ProxyProperties.Upstream up) {
@@ -437,13 +530,19 @@ public class ProxyService {
     private static final java.time.Duration BACKEND_DOWN_LOG_THROTTLE = java.time.Duration.ofMinutes(1);
     private final java.util.Map<String, java.time.Instant> lastBackendDownLog = new java.util.concurrent.ConcurrentHashMap<>();
 
-    private ResponseEntity<String> forward(ProxyProperties.Upstream up, String path, String payload) {
+    /** POST JSON com o Bearer do upstream — o par comum a {@link #forward} e {@link #forwardStreaming}. */
+    private org.springframework.web.client.RestClient.RequestBodySpec post(ProxyProperties.Upstream up, String path) {
         var spec = http.post()
                 .uri(up.baseUrl() + path)
                 .contentType(MediaType.APPLICATION_JSON);
         if (up.apiKey() != null && !up.apiKey().isBlank()) {
             spec = spec.header("Authorization", "Bearer " + up.apiKey());
         }
+        return spec;
+    }
+
+    private ResponseEntity<String> forward(ProxyProperties.Upstream up, String path, String payload) {
+        var spec = post(up, path);
         try {
             return stripHopByHopHeaders(spec.body(payload)
                     .retrieve()
@@ -480,13 +579,22 @@ public class ProxyService {
      */
     private ResponseEntity<StreamingResponseBody> forwardStreaming(ProxyProperties.Upstream up, String path,
             String payload, String target, ObjectNode request) {
-        var spec = http.post()
-                .uri(up.baseUrl() + path)
-                .contentType(MediaType.APPLICATION_JSON);
-        if (up.apiKey() != null && !up.apiKey().isBlank()) {
-            spec = spec.header("Authorization", "Bearer " + up.apiKey());
-        }
+        var spec = post(up, path);
         long startedAt = System.currentTimeMillis();
+        try {
+            return exchangeStreaming(spec, payload, target, request, startedAt);
+        } catch (org.springframework.web.client.ResourceAccessException e) {
+            // SPEC-chat-backlog C.C2: a fase 2 do chat é stream — sem isto o alarme do Loki nunca via o backend caído.
+            logBackendDownThrottled(up.baseUrl(), path, e);
+            throw e;
+        }
+    }
+
+    private static final int MAX_SSE_LINE_BYTES = 64 * 1024;
+
+    private ResponseEntity<StreamingResponseBody> exchangeStreaming(
+            org.springframework.web.client.RestClient.RequestBodySpec spec, String payload, String target,
+            ObjectNode request, long startedAt) {
         return spec.body(payload).exchange((req, res) -> {
             HttpHeaders headers = new HttpHeaders();
             res.getHeaders().forEach((name, values) -> {
@@ -500,7 +608,10 @@ public class ProxyService {
                 }
             });
             StreamingResponseBody streamBody = out -> {
-                StringBuilder sseBuffer = new StringBuilder();
+                // SPEC-chat-backlog C.I3: só a última linha "data:" com "usage" (o resto do stream não fica em memória);
+                // a linha é decodificada inteira, então multibyte cortado entre leituras não corrompe o JSON.
+                java.io.ByteArrayOutputStream line = new java.io.ByteArrayOutputStream();
+                String usageLine = null;
                 try {
                     try (InputStream in = res.getBody()) {
                         byte[] buf = new byte[512];
@@ -508,7 +619,16 @@ public class ProxyService {
                         while ((n = in.read(buf)) != -1) {
                             out.write(buf, 0, n);
                             out.flush(); // each SSE event must reach the client as it arrives, not batched
-                            sseBuffer.append(new String(buf, 0, n, java.nio.charset.StandardCharsets.UTF_8));
+                            for (int i = 0; i < n; i++) {
+                                if (buf[i] != '\n') {
+                                    // Teto por linha: uma linha SSE enorme sem \n não cresce sem limite (a de usage é curta).
+                                    if (line.size() < MAX_SSE_LINE_BYTES) line.write(buf[i]);
+                                    continue;
+                                }
+                                String text = line.toString(StandardCharsets.UTF_8);
+                                if (text.startsWith("data:") && text.contains("\"usage\"")) usageLine = text;
+                                line.reset();
+                            }
                         }
                     }
                 } catch (IOException clientGone) {
@@ -520,7 +640,7 @@ public class ProxyService {
                     log.debug("[chat-stream] client disconnected mid-stream | route={} model={}",
                             target, request.path("model").asText("?"), clientGone);
                 } finally {
-                    logStreamSummary(target, request, sseBuffer.toString(), res.getStatusCode().value(),
+                    logStreamSummary(target, request, usageLine, res.getStatusCode().value(),
                             System.currentTimeMillis() - startedAt);
                 }
             };
@@ -547,19 +667,21 @@ public class ProxyService {
         return new ResponseEntity<>(upstream.getBody(), headers, upstream.getStatusCode());
     }
 
-    /** Rough token estimate (~4 chars/token) over message contents — enough to pick a route. */
-    private static int estimateTokens(JsonNode json) {
-        JsonNode messages = json.get("messages");
-        if (messages == null || !messages.isArray()) {
-            return 0;
-        }
+    /** Rough token estimate (~4 chars/token) over message contents and tool specs — enough to pick a route.
+     *  SPEC-chat-backlog C.I4: o chat manda boa parte dos ~21k tokens em {@code tools} e conteúdo em partes
+     *  ({@code [{type:text,text:…}]}); sem eles o limiar de speed decidia sobre uma fração do tamanho real. */
+    static int estimateTokens(JsonNode json) {
         int chars = 0;
-        for (JsonNode m : messages) {
-            JsonNode content = m.get("content");
-            if (content != null && content.isTextual()) {
+        for (JsonNode m : json.path("messages")) {
+            JsonNode content = m.path("content");
+            if (content.isTextual()) {
                 chars += content.asText().length();
+            } else if (content.isArray()) {
+                for (JsonNode part : content) chars += part.path("text").asText("").length();
             }
         }
+        JsonNode tools = json.path("tools");
+        if (tools.isArray()) chars += tools.toString().length();
         return chars / 4;
     }
 }
