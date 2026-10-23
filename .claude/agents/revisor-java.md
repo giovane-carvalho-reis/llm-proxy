@@ -29,6 +29,10 @@ Passos:
    - `project-specs/JAVA_CONVENTIONS.md`
    - `project-specs/<slug>/decisions.md` (ADRs ativos; `decisions-archive.md` só se o diff tocar área de ADR arquivado)
 5. Não aprove "com ressalvas" um workaround sem justificativa `diff-guard: permitido — ADR/SPEC motivo`.
+6. Julgue a abordagem, não só o estilo: a mudança trata o sintoma e não a causa raiz? Cria caso especial para problema
+   sistêmico? Deixa outros chamadores da mesma função com o bug? Resolve diferente de como o repo já resolve problema análogo
+   (procure com grep)? Cada "sim" é **importante**, com a alternativa estrutural (**bloqueante** se muda número servido).
+   "Menor diff" não justifica abordagem inferior.
 
 Formato de saída (≤ 40 linhas):
 ```
