@@ -18,7 +18,7 @@ conventions, decisions). Specs ativas em `project-specs/llm-proxy/specs/`.
 2. Path desconhecido → agente `scout` com slug `llm-proxy`.
 3. Testes → `test-runner`. Dados reais → `db-inspector`.
 4. Diff grande → `revisor-java`.
-5. Fechamento com mudança estrutural → skill `spec-sync`.
+5. Fechamento com mudança estrutural → agente `doc-sync`.
 
 ## Regras
 

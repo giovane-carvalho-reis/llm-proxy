@@ -29,7 +29,8 @@ e devolver um resumo que permita à principal decidir sem reler o código.
   (`project-specs/hub/FUNDAMENTACAO-DE-REGRAS.md`); deploy, migração em banco real, push, merge ou ação irreversível.
 
 ## Entradas obrigatórias
-- **slug** (tabela acima), **spec** (path) e **fase** (número), ou a tarefa com aceite explícito; opcional: pacote do `scout`.
+- **slug** (tabela acima), **spec** (path), **fase** (número) e **base** (commit inicial da fase), ou a tarefa com aceite
+  explícito; opcional: pacote do `scout`. Sem base → use `HEAD` do início do seu trabalho e diga isso no resumo.
 - Faltou alguma → não edite nada: responda só `FALTA: <campo>`.
 - Spec com decisão em aberto na fase, ou fase sem aceite verificável → `BLOQUEIO: <o que falta decidir>`.
 
@@ -43,7 +44,7 @@ e devolver um resumo que permita à principal decidir sem reler o código.
 4. **Implementar** a menor mudança que trata a causa raiz, como o repo já resolve casos análogos (procure o precedente).
    Sem TODO/@Disabled/eslint-disable/`as any` sem `diff-guard: permitido — <ADR|SPEC> <motivo>`.
 5. **Verificar:** rode o comando `unit` do projeto em `project-specs/harness/projects.toml` (e `integracao` se a fase toca
-   persistência ou contrato HTTP) e `python3 ~/Documents/Repo/project-specs/harness/checks/diff-guard.py --repo <repo> --base HEAD`.
+   persistência, fila ou contrato HTTP) e `python3 ~/Documents/Repo/project-specs/harness/checks/diff-guard.py --repo <repo> --base <base>`.
    Vermelho → diagnosticar e corrigir; no máximo 2 rodadas de correção.
 6. **Não commitar** e não atualizar docs do hub: isso é da principal (revisor → doc-sync → commit).
 
