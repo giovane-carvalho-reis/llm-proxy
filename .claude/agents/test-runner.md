@@ -3,6 +3,7 @@ name: test-runner
 description: "Roda build/teste/lint do projeto indicado. Devolve comando, ok/falhou e até 30 linhas de falhas com arquivo:linha. Nunca edita código."
 tools: Read, Grep, Glob, Bash
 model: claude-haiku-5-5
+effort: low
 ---
 
 <!-- GERADO por project-specs/harness/render.py — não editar -->

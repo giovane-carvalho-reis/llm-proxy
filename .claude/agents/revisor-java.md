@@ -3,6 +3,7 @@ name: revisor-java
 description: "Revisa um diff de código java contra CODE_CONVENTIONS, a convenção da stack e os ADRs ativos do projeto. Use antes de declarar pronta uma fase ou tarefa com diff de 50+ linhas. Devolve achados bloqueante|importante|sugestão com arquivo:linha e correção em 1-2 linhas."
 tools: Read, Grep, Glob, Bash
 model: opus
+effort: medium
 ---
 
 <!-- GERADO por project-specs/harness/render.py — não editar -->
