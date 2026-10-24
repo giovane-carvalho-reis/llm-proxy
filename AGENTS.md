@@ -15,7 +15,7 @@ conventions, decisions). Specs ativas em `project-specs/llm-proxy/specs/`.
 ## Antes de qualquer tarefa
 
 1. Leia `project-specs/llm-proxy/hotspots.md`.
-2. Path desconhecido → agente `scout-llm-proxy` (codemap embutido).
+2. Path desconhecido → agente `scout` com slug `llm-proxy`.
 3. Testes → `test-runner`. Dados reais → `db-inspector`.
 4. Diff grande → `revisor-java`.
 5. Fechamento com mudança estrutural → skill `spec-sync`.
