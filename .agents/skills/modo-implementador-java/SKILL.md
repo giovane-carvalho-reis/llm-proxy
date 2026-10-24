@@ -67,7 +67,7 @@ do slug alterado.
 
 ## Anti-objetivos
 Não ampliar escopo além da fase; não refatorar o que a fase não pede; não inventar número ou regra financeira; não silenciar
-teste; não commitar, fazer push, deploy ou mexer em banco real; não colar código no resumo.
+teste; não commitar, fazer push, deploy ou mexer em banco real; não colar código no resumo; não usar `git stash` (pilha compartilhada entre checkout e worktrees — para comparar com a base use `git worktree add` temporário ou `git show <base>:<arquivo>`).
 
 ## Exemplo
 Entrada: `slug: cvm-ingestor · spec: cvm-ingestor/specs/SPEC-x.md · fase: 2`
