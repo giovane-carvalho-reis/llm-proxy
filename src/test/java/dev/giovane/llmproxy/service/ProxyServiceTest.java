@@ -352,6 +352,104 @@ class ProxyServiceTest {
                 .containsExactlyInAnyOrder("openai/gpt-4o-mini", "deepseek/deepseek-chat");
     }
 
+    private void upstreamReturns(String path, int status) {
+        try {
+            upstream.removeContext(path);
+        } catch (IllegalArgumentException noSuchContext) {
+            // /health is not registered by default
+        }
+        upstream.createContext(path, exchange -> {
+            byte[] response = "{\"error\":{\"message\":\"down\"}}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(status, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+    }
+
+    /** C3 (ADR-012): health/models/openrouterModels relayed non-2xx as an opaque 500. */
+    @Test
+    void modelsRelaysUpstreamErrorStatusInsteadOfThrowing() {
+        upstreamReturns("/v1/models", 503);
+        ProxyService service = new ProxyService(props("env-key", "env-model"), new LlmConfigState(), mapper);
+
+        assertThat(service.models().getStatusCode().value()).isEqualTo(503);
+        assertThat(service.chatModels().getStatusCode().value()).isEqualTo(503);
+        assertThat(service.openrouterModels().getStatusCode().value()).isEqualTo(503);
+    }
+
+    @Test
+    void healthRelaysUpstreamErrorStatusInsteadOfThrowing() {
+        upstreamReturns("/health", 503);
+        ProxyService service = new ProxyService(props("env-key", "env-model"), new LlmConfigState(), mapper);
+
+        assertThat(service.health().getStatusCode().value()).isEqualTo(503);
+    }
+
+    /** I2: an upstream error must not be cached — the next call retries. */
+    @Test
+    void openrouterModelsDoesNotCacheUpstreamError() throws Exception {
+        upstreamReturns("/v1/models", 429);
+        ProxyService service = new ProxyService(props("env-key", "env-model"), new LlmConfigState(), mapper);
+        assertThat(service.openrouterModels().getStatusCode().value()).isEqualTo(429);
+
+        upstream.removeContext("/v1/models");
+        upstream.createContext("/v1/models", exchange -> {
+            byte[] response = "{\"data\":[{\"id\":\"a/b\",\"supported_parameters\":[\"structured_outputs\"]}]}".getBytes();
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+
+        var second = service.openrouterModels();
+        assertThat(second.getStatusCode().value()).isEqualTo(200);
+        assertThat(mapper.readTree(second.getBody()).get("data")).hasSize(1);
+    }
+
+    /** I2: a refresh in flight must not block callers when a (stale) catalog exists. */
+    @Test
+    void openrouterModelsServesCachedCatalogWhileAnotherThreadRefreshes() throws Exception {
+        ProxyService service = new ProxyService(props("env-key", "env-model"), new LlmConfigState(), mapper);
+        service.openrouterModels();
+        var lockField = ProxyService.class.getDeclaredField("openrouterModelsRefresh");
+        lockField.setAccessible(true);
+        var lock = (java.util.concurrent.locks.ReentrantLock) lockField.get(service);
+        var cacheField = ProxyService.class.getDeclaredField("openrouterModelsCache");
+        cacheField.setAccessible(true);
+        var cache = (AtomicReference<?>) cacheField.get(service);
+        Object fresh = cache.get();
+        var ctor = fresh.getClass().getDeclaredConstructors()[0];
+        ctor.setAccessible(true);
+        Object stale = ctor.newInstance(fresh.getClass().getRecordComponents()[0].getAccessor().invoke(fresh),
+                java.time.Instant.EPOCH);  // vencido
+        AtomicReference.class.getMethod("set", Object.class).invoke(cache, stale);
+        upstream.stop(0);
+
+        Thread holder = new Thread(lock::lock);  // simula outra thread presa na chamada HTTP
+        holder.start();
+        holder.join();
+        var response = java.util.concurrent.CompletableFuture.supplyAsync(service::openrouterModels)
+                .get(5, java.util.concurrent.TimeUnit.SECONDS);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        assertThat(mapper.readTree(response.getBody()).get("data")).hasSize(2);
+    }
+
+    /** I1: a body that is not a JSON object is the caller's error. */
+    @Test
+    void nonObjectRequestBodyIsRejectedAsInvalidRequest() {
+        ProxyService service = new ProxyService(props("env-key", "env-model"), new LlmConfigState(), mapper);
+
+        for (String body : java.util.List.of("[]", "\"x\"", "{", "null", "")) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.completions(body, "local", null))
+                    .as(body).isInstanceOf(InvalidRequestException.class);
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.embeddings(body))
+                    .as(body).isInstanceOf(InvalidRequestException.class);
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.rerank(body))
+                    .as(body).isInstanceOf(InvalidRequestException.class);
+        }
+    }
+
     // ── mergeGuardrailSystemPrompt: zero coverage before this (SPEC-chat-prompt-quality-and-
     // fidelity.md, A2 measurement flagged the gap). The marker below is guardrails.md's own
     // heading, stable across edits to the body text.

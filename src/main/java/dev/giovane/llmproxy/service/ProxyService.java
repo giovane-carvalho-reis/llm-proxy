@@ -21,6 +21,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Set;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -89,7 +90,7 @@ public class ProxyService {
     // StreamingResponseBody that just writes those same bytes once, so both branches share one
     // concrete, resolvable return type.
     public ResponseEntity<StreamingResponseBody> completions(String body, String route, String priority) throws Exception {
-        ObjectNode json = (ObjectNode) mapper.readTree(body);
+        ObjectNode json = parseRequestObject(body);
 
         // Before routing: the guardrail adds real tokens to the prompt, and the auto-route
         // threshold is a token count. Estimating first would route on a size the upstream
@@ -157,7 +158,7 @@ public class ProxyService {
 
     /** Embeddings passthrough — always the local bge-m3 llama-server; no routing to decide. */
     public ResponseEntity<String> embeddings(String body) throws Exception {
-        ObjectNode json = (ObjectNode) mapper.readTree(body);
+        ObjectNode json = parseRequestObject(body);
         ProxyProperties.Upstream up = props.embeddings();
         fillDefaultModel(json, up);
         return forward(up, "/v1/embeddings", mapper.writeValueAsString(json));
@@ -165,10 +166,24 @@ public class ProxyService {
 
     /** Rerank passthrough — always the local bge-reranker-v2-m3 llama-server; no routing to decide. */
     public ResponseEntity<String> rerank(String body) throws Exception {
-        ObjectNode json = (ObjectNode) mapper.readTree(body);
+        ObjectNode json = parseRequestObject(body);
         ProxyProperties.Upstream up = props.rerank();
         fillDefaultModel(json, up);
         return forward(up, "/v1/rerank", mapper.writeValueAsString(json));
+    }
+
+    /** Client request body must be a JSON object; anything else is the caller's error (400), not ours (500). */
+    private ObjectNode parseRequestObject(String body) {
+        JsonNode node;
+        try {
+            node = mapper.readTree(body);
+        } catch (JsonProcessingException e) {
+            throw new InvalidRequestException("request body is not valid JSON: " + e.getOriginalMessage());
+        }
+        if (!(node instanceof ObjectNode json)) {
+            throw new InvalidRequestException("request body must be a JSON object");
+        }
+        return json;
     }
 
     /** EmbeddingClient.is_available() — relayed to llama-swap's /health. */
@@ -176,7 +191,7 @@ public class ProxyService {
         return stripHopByHopHeaders(http.get()
                 .uri(props.embeddings().baseUrl() + "/health")
                 .retrieve()
-                .onStatus(s -> false, (req, res) -> { })
+                .onStatus(s -> true, (req, res) -> { })  // ADR-012: relay non-2xx as-is
                 .toEntity(String.class));
     }
 
@@ -185,7 +200,7 @@ public class ProxyService {
         return stripHopByHopHeaders(http.get()
                 .uri(props.llamaCpp().baseUrl() + "/v1/models")
                 .retrieve()
-                .onStatus(s -> false, (req, res) -> { })
+                .onStatus(s -> true, (req, res) -> { })  // ADR-012: relay non-2xx as-is
                 .toEntity(String.class));
     }
 
@@ -231,8 +246,14 @@ public class ProxyService {
     // dias/semanas, não em minutos. ponytail: TTL fixo, sem invalidação manual — se um modelo
     // sumir/aparecer no meio da janela, o operador só vê depois de 10min; ok pra esse caso de uso.
     private static final java.time.Duration OPENROUTER_MODELS_TTL = java.time.Duration.ofMinutes(10);
-    private volatile String openrouterModelsCache;
-    private volatile java.time.Instant openrouterModelsCachedAt = java.time.Instant.EPOCH;
+    private record CachedCatalog(String body, java.time.Instant at) { }
+    private final java.util.concurrent.atomic.AtomicReference<CachedCatalog> openrouterModelsCache =
+            new java.util.concurrent.atomic.AtomicReference<>();
+    // Single-flight: só uma thread renova; as demais devolvem o catálogo vencido se houver, em vez
+    // de esperar a OpenRouter (readTimeout de 15min); com cache frio elas esperam a renovação.
+    // Erro do upstream não é cacheado; havendo catálogo vencido, ele é servido no lugar do erro (ADR-015).
+    private final java.util.concurrent.locks.ReentrantLock openrouterModelsRefresh =
+            new java.util.concurrent.locks.ReentrantLock();
 
     /**
      * Modelos da OpenRouter elegíveis pro pipeline de extração de dividendos: precisam suportar
@@ -240,16 +261,46 @@ public class ProxyService {
      * exige no cvm-pdf-processor (ver ADR-035). O catálogo completo da OpenRouter tem ~425
      * modelos, a maioria irrelevante pra esse uso; filtra pra só os utilizáveis aqui.
      */
-    public synchronized ResponseEntity<String> openrouterModels() {
-        java.time.Instant now = java.time.Instant.now();
-        if (openrouterModelsCache != null
-                && now.isBefore(openrouterModelsCachedAt.plus(OPENROUTER_MODELS_TTL))) {
-            return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(openrouterModelsCache);
+    public ResponseEntity<String> openrouterModels() {
+        CachedCatalog cached = openrouterModelsCache.get();
+        if (isFresh(cached)) {
+            return catalogResponse(cached.body());
         }
+        if (!openrouterModelsRefresh.tryLock()) {
+            if (cached != null) {
+                return catalogResponse(cached.body());
+            }
+            openrouterModelsRefresh.lock();
+        }
+        try {
+            cached = openrouterModelsCache.get();
+            if (isFresh(cached)) {
+                return catalogResponse(cached.body());
+            }
+            ResponseEntity<String> fetched = fetchOpenrouterModels();
+            if (!fetched.getStatusCode().is2xxSuccessful() && cached != null) {
+                return catalogResponse(cached.body());
+            }
+            return fetched;
+        } finally {
+            openrouterModelsRefresh.unlock();
+        }
+    }
+
+    private static boolean isFresh(CachedCatalog cached) {
+        return cached != null && java.time.Instant.now().isBefore(cached.at().plus(OPENROUTER_MODELS_TTL));
+    }
+
+    private static ResponseEntity<String> catalogResponse(String body) {
+        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(body);
+    }
+
+    private ResponseEntity<String> fetchOpenrouterModels() {
+        java.time.Instant now = java.time.Instant.now();
         ResponseEntity<String> upstream = stripHopByHopHeaders(http.get()
                 .uri(props.openrouter().baseUrl() + "/v1/models")
                 .retrieve()
-                .onStatus(s -> false, (req, res) -> { })
+                .onStatus(s -> true, (req, res) -> { })  // ADR-012: relay non-2xx as-is
                 .toEntity(String.class));
         if (!upstream.getStatusCode().is2xxSuccessful() || upstream.getBody() == null) {
             return upstream;
@@ -271,11 +322,8 @@ public class ProxyService {
                 json.set("data", filtered);
             }
             String body = mapper.writeValueAsString(json);
-            openrouterModelsCache = body;
-            openrouterModelsCachedAt = now;
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            return ResponseEntity.ok().headers(headers).body(body);
+            openrouterModelsCache.set(new CachedCatalog(body, now));
+            return catalogResponse(body);
         } catch (IOException e) {
             return upstream;
         }
