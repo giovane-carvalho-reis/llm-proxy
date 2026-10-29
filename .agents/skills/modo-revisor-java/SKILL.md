@@ -40,7 +40,8 @@ melhora, com correção concreta, numa revisão só por fase.
 6. Julgar a abordagem, não só o estilo: trata o sintoma e não a causa raiz? Cria caso especial para problema sistêmico? Deixa
    outros chamadores da mesma função com o bug? Resolve diferente de como o repo já resolve caso análogo (procure com grep)?
    Cada "sim" é **importante**, com a alternativa estrutural (**bloqueante** se muda número servido). Código que muda número
-   servido sem nível N/B, ou V registrado em `project-specs/hub/FUNDAMENTACAO-DE-REGRAS.md` → **bloqueante**.
+   servido sem nível N/B, ou V registrado em `project-specs/hub/FUNDAMENTACAO-DE-REGRAS.md` → **bloqueante**; N vale
+   só com id de `project-specs/conhecimento/fontes.md` cuja seção em `conhecimento/normas/` sustente o que o código faz.
    "Menor diff" não justifica abordagem inferior.
 7. Spec informada → conferir se o aceite da fase está coberto por teste com assert que falharia sem a mudança.
 

@@ -38,14 +38,17 @@ e devolver um resumo que permita à principal decidir sem reler o código.
 ## Passos
 1. **Contexto (sempre, nesta ordem):** `project-specs/CODE_CONVENTIONS.md`, `project-specs/JAVA_CONVENTIONS.md`,
    `project-specs/<slug>/decisions.md` (ADRs ativos), `project-specs/<slug>/architecture.md`, `project-specs/<slug>/hotspots.md`,
-   e da spec só a §0 e a fase pedida. Saída: lista de regras/ADRs que a fase toca.
+   e da spec só a §0 e a fase pedida (mais as seções de `project-specs/conhecimento/normas/` que ela citar — regra de número
+   segue o trecho, não a memória). Saída: lista de regras/ADRs/normas que a fase toca.
 2. **Localizar:** use o pacote do scout se veio; senão Grep/Glob a partir dos "arquivos prováveis". Não leia arquivo inteiro
    acima de 300 linhas. Saída: arquivos e pontos de mudança.
 3. **Teste primeiro** quando a fase muda comportamento: escreva ou ajuste o teste que prova o aceite, no padrão de teste do repo.
 4. **Implementar** a menor mudança que trata a causa raiz, como o repo já resolve casos análogos (procure o precedente).
    Sem TODO/@Disabled/eslint-disable/`as any` sem `diff-guard: permitido — <ADR|SPEC> <motivo>`.
-5. **Verificar:** rode o comando `unit` do projeto em `project-specs/harness/projects.toml` (e `integracao` se a fase toca
-   persistência, fila ou contrato HTTP) e `python3 ~/Documents/Repo/project-specs/harness/checks/diff-guard.py --repo <repo> --base <base>`.
+5. **Verificar, do específico para o completo** (comandos em `project-specs/harness/projects.toml`): enquanto itera, rode só os
+   testes da área (`um_teste`, e `um_it` para IT, com os testes novos e os da classe/pacote tocado) + `unit`; a suíte de
+   integração completa (`integracao`, se a fase toca persistência, fila ou contrato HTTP) roda **uma vez**, no fim, já verde
+   nos específicos — se ela falhar, corrija e volte aos específicos antes de repetir. Também `python3 ~/Documents/Repo/project-specs/harness/checks/diff-guard.py --repo <repo> --base <base>`.
    Vermelho → diagnosticar e corrigir; no máximo 2 rodadas de correção.
 6. **Não commitar** e não atualizar docs do hub: isso é da principal (revisor → doc-sync → commit).
 
