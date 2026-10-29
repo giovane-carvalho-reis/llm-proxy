@@ -6,7 +6,12 @@ import dev.giovane.llmproxy.upstream.UpstreamFailure;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.TypeMismatchException;
+import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.ErrorResponse;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -45,5 +50,22 @@ class ApiExceptionHandler {
                 .body(Map.of("error", Map.of(
                         "message", "backend indisponível: " + (uri.find() ? uri.group(1) : "upstream"),
                         "type", "upstream_unavailable")));
+    }
+
+    /**
+     * Rede de segurança: exceção não prevista → 500 api_error. Erros 4xx que o Spring MVC já mapeia
+     * (ErrorResponse, corpo ilegível, tipo inválido, @ResponseStatus) são relançados para o resolvedor padrão.
+     */
+    @ExceptionHandler(Exception.class)
+    ResponseEntity<Map<String, Object>> unexpected(Exception e) throws Exception {
+        if (e instanceof ErrorResponse || e instanceof HttpMessageNotReadableException
+                || e instanceof TypeMismatchException
+                || AnnotatedElementUtils.hasAnnotation(e.getClass(), ResponseStatus.class)) {
+            throw e;
+        }
+        log.error("erro inesperado", e);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", Map.of(
+                "message", "erro interno",
+                "type", "api_error")));
     }
 }

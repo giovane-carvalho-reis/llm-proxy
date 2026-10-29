@@ -58,7 +58,7 @@ llm-proxy:
     speed-token-threshold: ${LLM_SPEED_TOKEN_THRESHOLD:8000}
     # llama.cpp prefill on ~60k-token docs is slow; keep this above the client timeout.
     read-timeout: ${LLM_READ_TIMEOUT:15m}
-    # Catálogo OpenRouter (/v1/openrouter/models): limiar operacional, nível H (não muda dado servido).
+    # Catálogo OpenRouter (/v1/models/openrouter): limiar operacional, nível H (não muda dado servido).
     # O catálogo responde em < 2 s em uso normal; sem isto herdaria os 15 min do chat e a tela travaria.
     catalog-read-timeout: ${LLM_CATALOG_READ_TIMEOUT:30s}
   # Shared secret required (X-Admin-Token header) to read/write /v1/config/**. Empty/absent

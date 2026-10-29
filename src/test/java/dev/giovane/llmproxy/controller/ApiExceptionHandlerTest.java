@@ -185,4 +185,39 @@ class ApiExceptionHandlerTest {
                         && e.getFormattedMessage().contains("restclient inesperado")
                         && e.getThrowableProxy() != null);
     }
+
+    @RestController
+    static class GenericBoomController {
+        @GetMapping("/generic")
+        String generic() {
+            throw new IllegalStateException("qualquer");
+        }
+    }
+
+    @Test
+    void genericExceptionReturns500ApiErrorAndIsLogged() throws Exception {
+        var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ApiExceptionHandler.class);
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            MockMvcBuilders.standaloneSetup(new GenericBoomController()).setControllerAdvice(new ApiExceptionHandler()).build()
+                    .perform(get("/generic"))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.error.type").value("api_error"))
+                    .andExpect(jsonPath("$.error.message").value("erro interno"));
+        } finally {
+            logger.detachAppender(appender);
+        }
+        Assertions.assertThat(appender.list)
+                .anyMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR
+                        && e.getFormattedMessage().contains("erro inesperado")
+                        && e.getThrowableProxy() != null);
+    }
+
+    @Test
+    void springFourXxStaysFourXx() throws Exception {
+        MockMvc m = MockMvcBuilders.standaloneSetup(new GenericBoomController()).setControllerAdvice(new ApiExceptionHandler()).build();
+        m.perform(post("/generic")).andExpect(status().isMethodNotAllowed());
+    }
 }
