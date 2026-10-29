@@ -53,4 +53,13 @@ class LlmConfigStateTest {
 
         assertThat(result).isSameAs(BASE);
     }
+
+    @Test
+    void overrideEqualToBaseInDifferentInstanceReturnsBase() {
+        LlmConfigState state = new LlmConfigState();
+        state.setOpenrouterApiKey(new String("env-key"));
+        state.setOpenrouterDefaultModel(new String("env-model"));
+
+        assertThat(state.effective(Router.OPENROUTER, BASE)).isSameAs(BASE);
+    }
 }

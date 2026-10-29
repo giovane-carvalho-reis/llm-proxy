@@ -2,6 +2,7 @@ package dev.giovane.llmproxy.config;
 
 import dev.giovane.llmproxy.controller.ChatController;
 import dev.giovane.llmproxy.controller.ConfigController;
+import dev.giovane.llmproxy.service.ModelCatalogService;
 import dev.giovane.llmproxy.service.ProxyService;
 
 import org.junit.jupiter.api.Test;
@@ -38,6 +39,9 @@ class AdminTokenInterceptorTest {
 
     @MockBean
     private ProxyService proxyService;
+
+    @MockBean
+    private ModelCatalogService modelCatalogService;
 
     @MockBean
     private LlmConfigState configState;

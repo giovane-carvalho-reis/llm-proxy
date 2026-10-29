@@ -5,8 +5,12 @@ import dev.giovane.llmproxy.config.ProxyProperties;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 
 import java.time.Duration;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -15,6 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the collaborator we are actually asserting behaviour on) — verifies partial-update semantics
  * and that the plaintext API key never leaks through GET.
  */
+@ExtendWith(OutputCaptureExtension.class)
 class ConfigControllerTest {
 
     private static final ProxyProperties.Upstream OPENROUTER =
@@ -31,7 +36,7 @@ class ConfigControllerTest {
     @BeforeEach
     void setUp() {
         props = new ProxyProperties(LLAMA_CPP, OPENROUTER, EMBEDDINGS, EMBEDDINGS,
-                new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "admin-token", java.util.List.of(), java.util.List.of());
+                new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "admin-token", List.of(), List.of());
         configState = new LlmConfigState();
         controller = new ConfigController(props, configState);
     }
@@ -51,7 +56,7 @@ class ConfigControllerTest {
         ProxyProperties propsNoKey = new ProxyProperties(LLAMA_CPP,
                 new ProxyProperties.Upstream(OPENROUTER.baseUrl(), null, OPENROUTER.defaultModel(), null),
                 EMBEDDINGS, EMBEDDINGS, new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "admin-token",
-                java.util.List.of(), java.util.List.of());
+                List.of(), List.of());
         ConfigController noKeyController = new ConfigController(propsNoKey, configState);
 
         ConfigController.ConfigView view = noKeyController.get();
@@ -103,5 +108,27 @@ class ConfigControllerTest {
         assertThat(view.openrouterDefaultModel().source()).isEqualTo("override");
         assertThat(view.llamaCppDefaultModel().value()).isEqualTo("override-llama-model");
         assertThat(view.llamaCppDefaultModel().source()).isEqualTo("override");
+    }
+
+    @Test
+    void putLogsOnlyFieldNamesNeverValues(CapturedOutput output) {
+        controller.put(new ConfigController.UpdateRequest("super-secret-value-1234", null, null));
+
+        assertThat(output.getAll()).contains("config alterada campos=[openrouterApiKey]");
+        assertThat(output.getAll()).doesNotContain("super-secret-value-1234");
+    }
+
+    @Test
+    void shortApiKeyIsFullyMasked() {
+        controller.put(new ConfigController.UpdateRequest("abc", null, null));
+
+        assertThat(controller.get().openrouterApiKeyMasked()).isEqualTo("***");
+    }
+
+    @Test
+    void longApiKeyIsMaskedWithEllipsisAndLastFour() {
+        controller.put(new ConfigController.UpdateRequest("abcdefgh1234", null, null));
+
+        assertThat(controller.get().openrouterApiKeyMasked()).isEqualTo("…1234");
     }
 }

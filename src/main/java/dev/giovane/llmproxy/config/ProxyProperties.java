@@ -27,16 +27,21 @@ public record ProxyProperties(Upstream llamaCpp, Upstream openrouter, Upstream e
                 && openrouterModelsWithoutTemperature.stream().anyMatch(p -> !p.isBlank() && model.startsWith(p.trim()));
     }
 
-    /** usageAccounting/promptCache: toggles só do upstream openrouter (null = ligado). */
+    /** usageAccounting/promptCache/reasoningDefaultOff: toggles só do upstream openrouter (null = ligado). */
     public record Upstream(String baseUrl, String apiKey, String defaultModel, Double temperature,
-            Boolean usageAccounting, Boolean promptCache) {
+            Boolean usageAccounting, Boolean promptCache, Boolean reasoningDefaultOff) {
 
         @ConstructorBinding
         public Upstream {
         }
 
         public Upstream(String baseUrl, String apiKey, String defaultModel, Double temperature) {
-            this(baseUrl, apiKey, defaultModel, temperature, null, null);
+            this(baseUrl, apiKey, defaultModel, temperature, null, null, null);
+        }
+
+        public Upstream(String baseUrl, String apiKey, String defaultModel, Double temperature,
+                Boolean usageAccounting, Boolean promptCache) {
+            this(baseUrl, apiKey, defaultModel, temperature, usageAccounting, promptCache, null);
         }
 
         public boolean usageAccountingEnabled() {
@@ -46,9 +51,27 @@ public record ProxyProperties(Upstream llamaCpp, Upstream openrouter, Upstream e
         public boolean promptCacheEnabled() {
             return promptCache == null || promptCache;
         }
+
+        public boolean reasoningDefaultOffEnabled() {
+            return reasoningDefaultOff == null || reasoningDefaultOff;
+        }
     }
 
     /** speedTokenThreshold: in "auto", a speed-hinted request bigger than this stays local. */
-    public record Routing(int speedTokenThreshold, Duration readTimeout) {
+    public record Routing(int speedTokenThreshold, Duration readTimeout, Duration catalogReadTimeout) {
+
+        /** Catálogo OpenRouter responde em &lt; 2 s em uso normal; 30 s é limiar operacional (nível H). */
+        static final Duration DEFAULT_CATALOG_READ_TIMEOUT = Duration.ofSeconds(30);
+
+        @ConstructorBinding
+        public Routing {
+            if (catalogReadTimeout == null) {
+                catalogReadTimeout = DEFAULT_CATALOG_READ_TIMEOUT;
+            }
+        }
+
+        public Routing(int speedTokenThreshold, Duration readTimeout) {
+            this(speedTokenThreshold, readTimeout, null);
+        }
     }
 }

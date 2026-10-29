@@ -3,18 +3,25 @@ package dev.giovane.llmproxy.controller;
 import dev.giovane.llmproxy.config.LlmConfigState;
 import dev.giovane.llmproxy.config.ProxyProperties;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Read/write endpoint for the in-memory runtime config overrides ({@link LlmConfigState}).
- * Protected by {@link dev.giovane.llmproxy.config.AdminTokenInterceptor} — never reachable
+ * Protected by {@code AdminTokenInterceptor} — never reachable
  * without a valid {@code X-Admin-Token}.
  */
 @RestController
 public class ConfigController {
+
+    private static final Logger log = LoggerFactory.getLogger(ConfigController.class);
 
     private final ProxyProperties props;
     private final LlmConfigState configState;
@@ -52,6 +59,17 @@ public class ConfigController {
      */
     @PutMapping("/v1/config")
     ConfigView put(@RequestBody UpdateRequest request) {
+        List<String> fields = new ArrayList<>();
+        if (request.openrouterApiKey() != null) {
+            fields.add("openrouterApiKey");
+        }
+        if (request.openrouterDefaultModel() != null) {
+            fields.add("openrouterDefaultModel");
+        }
+        if (request.llamaCppDefaultModel() != null) {
+            fields.add("llamaCppDefaultModel");
+        }
+        log.info("config alterada campos={}", fields);
         configState.setOpenrouterApiKey(request.openrouterApiKey());
         configState.setOpenrouterDefaultModel(request.openrouterDefaultModel());
         configState.setLlamaCppDefaultModel(request.llamaCppDefaultModel());
@@ -59,8 +77,10 @@ public class ConfigController {
     }
 
     private static String maskApiKey(String apiKey) {
-        String suffix = apiKey.length() >= 4 ? apiKey.substring(apiKey.length() - 4) : apiKey;
-        return "sk-or-…" + suffix;
+        if (apiKey.length() < 8) {
+            return "***";
+        }
+        return "…" + apiKey.substring(apiKey.length() - 4);
     }
 
     public record UpdateRequest(String openrouterApiKey, String openrouterDefaultModel, String llamaCppDefaultModel) {

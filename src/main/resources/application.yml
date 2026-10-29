@@ -36,6 +36,10 @@ llm-proxy:
     usage-accounting: ${OPENROUTER_USAGE_ACCOUNTING:true}
     # D11/D13: marca cache_control (ephemeral) no system e na última mensagem user de modelos anthropic/*.
     prompt-cache: ${OPENROUTER_PROMPT_CACHE:true}
+    # ADR-019 / incidente 2026-10-13: modelos com raciocínio gastavam max_tokens baixo pensando e devolviam
+    # content: null. Sem reasoning/include_reasoning/reasoning_effort do chamador, injeta reasoning.enabled=false.
+    # Não injeta quando provider.require_parameters=true (tools/json_schema): endpoint sem reasoning zeraria candidatos (404).
+    reasoning-default-off: ${OPENROUTER_REASONING_DEFAULT_OFF:true}
   embeddings:
     # bge-m3 via llama-swap (grupo "embeddings", CPU/RAM): sobe sob demanda e convive
     # com o modelo de chat carregado — ninguém mais gerencia processo de embed.
@@ -54,6 +58,9 @@ llm-proxy:
     speed-token-threshold: ${LLM_SPEED_TOKEN_THRESHOLD:8000}
     # llama.cpp prefill on ~60k-token docs is slow; keep this above the client timeout.
     read-timeout: ${LLM_READ_TIMEOUT:15m}
+    # Catálogo OpenRouter (/v1/openrouter/models): limiar operacional, nível H (não muda dado servido).
+    # O catálogo responde em < 2 s em uso normal; sem isto herdaria os 15 min do chat e a tela travaria.
+    catalog-read-timeout: ${LLM_CATALOG_READ_TIMEOUT:30s}
   # Shared secret required (X-Admin-Token header) to read/write /v1/config/**. Empty/absent
   # means every request to that path is denied (fail-closed), never opened by omission.
   admin-token: ${LLM_PROXY_ADMIN_TOKEN:}

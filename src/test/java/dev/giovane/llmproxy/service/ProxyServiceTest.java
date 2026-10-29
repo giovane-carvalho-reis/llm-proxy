@@ -1,23 +1,36 @@
 package dev.giovane.llmproxy.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 
+import dev.giovane.llmproxy.api.InvalidRequestException;
 import dev.giovane.llmproxy.config.LlmConfigState;
 import dev.giovane.llmproxy.config.ProxyProperties;
 
+import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -31,12 +44,12 @@ class ProxyServiceTest {
     private HttpServer upstream;
     private final AtomicReference<String> lastAuthHeader = new AtomicReference<>();
     private final AtomicReference<String> lastModel = new AtomicReference<>();
-    private final AtomicReference<com.fasterxml.jackson.databind.JsonNode> lastMessages = new AtomicReference<>();
+    private final AtomicReference<JsonNode> lastMessages = new AtomicReference<>();
     private final AtomicReference<String> lastPath = new AtomicReference<>();
     private final AtomicReference<String> lastTemperature = new AtomicReference<>();
-    private final AtomicReference<com.fasterxml.jackson.databind.JsonNode> lastProvider = new AtomicReference<>();
+    private final AtomicReference<JsonNode> lastProvider = new AtomicReference<>();
     private final AtomicReference<String> lastToolChoice = new AtomicReference<>();
-    private final AtomicReference<com.fasterxml.jackson.databind.JsonNode> lastBody = new AtomicReference<>();
+    private final AtomicReference<JsonNode> lastBody = new AtomicReference<>();
     private final ObjectMapper mapper = new ObjectMapper();
 
     @BeforeEach
@@ -104,7 +117,7 @@ class ProxyServiceTest {
     private ProxyProperties props(String envApiKey, String envModel, Double temperature) {
         ProxyProperties.Upstream up = new ProxyProperties.Upstream(baseUrl(), envApiKey, envModel, temperature);
         return new ProxyProperties(up, up, up, up, new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "",
-                java.util.List.of("qwen3-14b", "qwen3.6-35b", "qwen3.8-27b"), java.util.List.of("openai/gpt-6"));
+                List.of("qwen3-14b", "qwen3.6-35b", "qwen3.8-27b"), List.of("openai/gpt-6"));
     }
 
     @Test
@@ -113,7 +126,7 @@ class ProxyServiceTest {
         LlmConfigState configState = new LlmConfigState();
         configState.setOpenrouterApiKey("override-key");
         configState.setOpenrouterDefaultModel("override-model");
-        ProxyService service = new ProxyService(props, configState, mapper);
+        ProxyService service = TestServices.proxy(props, configState, mapper);
 
         service.completions("{\"messages\":[]}", "openrouter", null);
 
@@ -125,7 +138,7 @@ class ProxyServiceTest {
     void completionsUsesEnvValuesWhenNoOverrideIsSet() throws Exception {
         ProxyProperties props = props("env-key", "env-model");
         LlmConfigState configState = new LlmConfigState();
-        ProxyService service = new ProxyService(props, configState, mapper);
+        ProxyService service = TestServices.proxy(props, configState, mapper);
 
         service.completions("{\"messages\":[]}", "openrouter", null);
 
@@ -136,7 +149,7 @@ class ProxyServiceTest {
     @Test
     void completionsForcesConfiguredTemperatureOverClientValue() throws Exception {
         ProxyProperties props = props("env-key", "env-model", 0.0);
-        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+        ProxyService service = TestServices.proxy(props, new LlmConfigState(), mapper);
 
         service.completions("{\"messages\":[],\"temperature\":1.5}", "openrouter", null);
 
@@ -147,7 +160,7 @@ class ProxyServiceTest {
     @Test
     void completionsDropsTemperatureForOpenRouterModelsThatRejectIt() throws Exception {
         ProxyProperties props = props("env-key", "env-model", 0.0);
-        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+        ProxyService service = TestServices.proxy(props, new LlmConfigState(), mapper);
 
         service.completions("{\"model\":\"openai/gpt-6-luna\",\"messages\":[],\"temperature\":0.3,"
                 + "\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"x\"}}]}", "openrouter", null);
@@ -158,7 +171,7 @@ class ProxyServiceTest {
     @Test
     void otherOpenRouterModelsStillGetTheForcedTemperature() throws Exception {
         ProxyProperties props = props("env-key", "env-model", 0.0);
-        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+        ProxyService service = TestServices.proxy(props, new LlmConfigState(), mapper);
 
         service.completions("{\"model\":\"openai/gpt-4o-mini\",\"messages\":[]}", "openrouter", null);
 
@@ -168,7 +181,7 @@ class ProxyServiceTest {
     @Test
     void completionsLeavesTemperatureUntouchedWhenNotConfigured() throws Exception {
         ProxyProperties props = props("env-key", "env-model", null);
-        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+        ProxyService service = TestServices.proxy(props, new LlmConfigState(), mapper);
 
         service.completions("{\"messages\":[],\"temperature\":1.5}", "openrouter", null);
 
@@ -181,7 +194,7 @@ class ProxyServiceTest {
     @Test
     void completionsForcesConfiguredTemperatureWhenClientOmitsIt() throws Exception {
         ProxyProperties props = props("env-key", "env-model", 0.0);
-        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+        ProxyService service = TestServices.proxy(props, new LlmConfigState(), mapper);
 
         service.completions("{\"messages\":[]}", "openrouter", null);
 
@@ -190,7 +203,7 @@ class ProxyServiceTest {
 
     @Test
     void plainOpenRouterCompletionDoesNotRequireEveryEndpointParameter() throws Exception {
-        ProxyService service = new ProxyService(props("env-key", "env-model", 0.0),
+        ProxyService service = TestServices.proxy(props("env-key", "env-model", 0.0),
                 new LlmConfigState(), mapper);
 
         service.completions("{\"messages\":[],\"reasoning\":{\"max_tokens\":512}}",
@@ -201,7 +214,7 @@ class ProxyServiceTest {
 
     @Test
     void toolCallingStillPinsOpenRouterToCompatibleEndpoint() throws Exception {
-        ProxyService service = new ProxyService(props("env-key", "env-model", 0.0),
+        ProxyService service = TestServices.proxy(props("env-key", "env-model", 0.0),
                 new LlmConfigState(), mapper);
 
         service.completions("{\"messages\":[],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"lookup\"}}]}",
@@ -213,7 +226,7 @@ class ProxyServiceTest {
 
     @Test
     void jsonSchemaStillPinsOpenRouterToCompatibleEndpoint() throws Exception {
-        ProxyService service = new ProxyService(props("env-key", "env-model", 0.0),
+        ProxyService service = TestServices.proxy(props("env-key", "env-model", 0.0),
                 new LlmConfigState(), mapper);
 
         service.completions("{\"messages\":[],\"response_format\":{\"type\":\"json_schema\"}}",
@@ -229,7 +242,7 @@ class ProxyServiceTest {
         LlmConfigState configState = new LlmConfigState();
         configState.setOpenrouterApiKey("override-key");
         configState.setOpenrouterDefaultModel("override-model");
-        ProxyService service = new ProxyService(props, configState, mapper);
+        ProxyService service = TestServices.proxy(props, configState, mapper);
 
         service.embeddings("{}");
 
@@ -249,9 +262,9 @@ class ProxyServiceTest {
             exchange.close();
         });
         ProxyProperties props = props("env-key", "env-model");
-        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+        ProxyService service = TestServices.proxy(props, new LlmConfigState(), mapper);
 
-        var response = service.completions("{\"messages\":[]}", "local", null);
+        var response = service.completions("{\"messages\":[]}", "auto", null);
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         response.getBody().writeTo(out);
@@ -277,10 +290,10 @@ class ProxyServiceTest {
             exchange.close();
         });
         ProxyProperties props = props("env-key", "env-model");
-        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+        ProxyService service = TestServices.proxy(props, new LlmConfigState(), mapper);
 
         ResponseEntity<StreamingResponseBody> response =
-                service.completions("{\"messages\":[],\"stream\":true}", "local", null);
+                service.completions("{\"messages\":[],\"stream\":true}", "auto", null);
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         response.getBody().writeTo(out);
@@ -302,9 +315,9 @@ class ProxyServiceTest {
             exchange.close();
         });
         ProxyProperties props = props("env-key", "env-model");
-        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+        ProxyService service = TestServices.proxy(props, new LlmConfigState(), mapper);
 
-        ResponseEntity<StreamingResponseBody> response = service.completions("{\"messages\":[]}", "local", null);
+        ResponseEntity<StreamingResponseBody> response = service.completions("{\"messages\":[]}", "auto", null);
 
         assertThat(response.getStatusCode().value()).isEqualTo(429);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -315,7 +328,7 @@ class ProxyServiceTest {
     @Test
     void chatModelsFiltersOutEmbeddingAndRerankModels() throws Exception {
         ProxyProperties props = props("env-key", "env-model");
-        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+        ModelCatalogService service = TestServices.catalog(props, mapper);
 
         var response = service.chatModels();
 
@@ -328,7 +341,7 @@ class ProxyServiceTest {
     @Test
     void openrouterModelsFiltersToStructuredOutputsCapableModels() throws Exception {
         ProxyProperties props = props("env-key", "env-model");
-        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+        ModelCatalogService service = TestServices.catalog(props, mapper);
 
         var response = service.openrouterModels();
 
@@ -340,7 +353,7 @@ class ProxyServiceTest {
     @Test
     void openrouterModelsCachesAcrossCalls() throws Exception {
         ProxyProperties props = props("env-key", "env-model");
-        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+        ModelCatalogService service = TestServices.catalog(props, mapper);
 
         service.openrouterModels();
         upstream.stop(0);  // upstream indisponível na 2ª chamada — só passa se veio do cache
@@ -371,7 +384,7 @@ class ProxyServiceTest {
     @Test
     void modelsRelaysUpstreamErrorStatusInsteadOfThrowing() {
         upstreamReturns("/v1/models", 503);
-        ProxyService service = new ProxyService(props("env-key", "env-model"), new LlmConfigState(), mapper);
+        ModelCatalogService service = TestServices.catalog(props("env-key", "env-model"), mapper);
 
         assertThat(service.models().getStatusCode().value()).isEqualTo(503);
         assertThat(service.chatModels().getStatusCode().value()).isEqualTo(503);
@@ -381,7 +394,7 @@ class ProxyServiceTest {
     @Test
     void healthRelaysUpstreamErrorStatusInsteadOfThrowing() {
         upstreamReturns("/health", 503);
-        ProxyService service = new ProxyService(props("env-key", "env-model"), new LlmConfigState(), mapper);
+        ModelCatalogService service = TestServices.catalog(props("env-key", "env-model"), mapper);
 
         assertThat(service.health().getStatusCode().value()).isEqualTo(503);
     }
@@ -390,7 +403,7 @@ class ProxyServiceTest {
     @Test
     void openrouterModelsDoesNotCacheUpstreamError() throws Exception {
         upstreamReturns("/v1/models", 429);
-        ProxyService service = new ProxyService(props("env-key", "env-model"), new LlmConfigState(), mapper);
+        ModelCatalogService service = TestServices.catalog(props("env-key", "env-model"), mapper);
         assertThat(service.openrouterModels().getStatusCode().value()).isEqualTo(429);
 
         upstream.removeContext("/v1/models");
@@ -406,30 +419,121 @@ class ProxyServiceTest {
         assertThat(mapper.readTree(second.getBody()).get("data")).hasSize(1);
     }
 
+    /** REV-107: erro na renovação com catálogo vencido serve o vencido. */
+    @Test
+    void openrouterModelsServesExpiredCatalogWhenRefreshFails() throws Exception {
+        ModelCatalogService service = TestServices.catalog(props("env-key", "env-model"), mapper);
+        String first = service.openrouterModels().getBody();
+        var field = ModelCatalogService.class.getDeclaredField("openrouterModelsCache");
+        field.setAccessible(true);
+        var ref = (AtomicReference<Object>) field.get(service);
+        Object cached = ref.get();
+        var ctor = cached.getClass().getDeclaredConstructors()[0];
+        ctor.setAccessible(true);
+        ref.set(ctor.newInstance(first, Instant.now().minus(Duration.ofHours(1))));
+
+        upstreamReturns("/v1/models", 500);
+        var second = service.openrouterModels();
+        assertThat(second.getStatusCode().value()).isEqualTo(200);
+        assertThat(second.getBody()).isEqualTo(first);
+
+        upstream.stop(0);
+        var third = service.openrouterModels();
+        assertThat(third.getStatusCode().value()).isEqualTo(200);
+        assertThat(third.getBody()).isEqualTo(first);
+    }
+
+    /** Timeout na leitura do corpo (headers com Content-Length maior que o corpo) também serve o vencido. */
+    @Test
+    void openrouterModelsServesExpiredCatalogWhenBodyReadTimesOut() throws Exception {
+        ModelCatalogService service = TestServices.catalog(new ProxyProperties(
+                props("k", "m").llamaCpp(), props("k", "m").openrouter(), props("k", "m").embeddings(),
+                props("k", "m").rerank(),
+                new ProxyProperties.Routing(8000, Duration.ofMinutes(1), Duration.ofMillis(300)), "",
+                List.of(), List.of()), mapper);
+        String first = service.openrouterModels().getBody();
+        var field = ModelCatalogService.class.getDeclaredField("openrouterModelsCache");
+        field.setAccessible(true);
+        var ref = (AtomicReference<Object>) field.get(service);
+        var ctor = ref.get().getClass().getDeclaredConstructors()[0];
+        ctor.setAccessible(true);
+        ref.set(ctor.newInstance(first, Instant.now().minus(Duration.ofHours(1))));
+
+        upstream.removeContext("/v1/models");
+        upstream.createContext("/v1/models", exchange -> {
+            exchange.sendResponseHeaders(200, 1000);
+            exchange.getResponseBody().write("{\"da".getBytes());
+            exchange.getResponseBody().flush();
+            try {
+                new CountDownLatch(1).await(3, TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            exchange.close();
+        });
+        var served = service.openrouterModels();
+        assertThat(served.getStatusCode().value()).isEqualTo(200);
+        assertThat(served.getBody()).isEqualTo(first);
+    }
+
+    /** N5: upstream 200 com array no topo não vira 500 — devolve o upstream. */
+    @Test
+    void chatModelsReturnsUpstreamWhenBodyIsNotAnObject() {
+        upstream.removeContext("/v1/models");
+        upstream.createContext("/v1/models", exchange -> {
+            byte[] response = "[]".getBytes();
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        ModelCatalogService service = TestServices.catalog(props("k", "m"), mapper);
+        assertThat(service.chatModels().getBody()).isEqualTo("[]");
+        assertThat(service.openrouterModels().getBody()).isEqualTo("[]");
+    }
+
+    /** N3: exatamente 1 linha de resumo por request de embeddings. */
+    @Test
+    void embeddingsLogsOneSummaryLineWithInputCount() throws Exception {
+        var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("dev.giovane.llmproxy.service");
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            TestServices.proxy(props("k", "m"), new LlmConfigState(), mapper)
+                    .embeddings("{\"input\":[\"a\",\"b\",\"c\"]}");
+        } finally {
+            logger.detachAppender(appender);
+        }
+        assertThat(appender.list.stream().map(e -> e.getFormattedMessage()).filter(m -> m.startsWith("embed ")))
+                .singleElement().satisfies(m -> assertThat(m).contains("kind=embeddings", "status=200", "inputs=3")
+                        .doesNotContain("\"a\""));
+    }
+
     /** I2: a refresh in flight must not block callers when a (stale) catalog exists. */
     @Test
     void openrouterModelsServesCachedCatalogWhileAnotherThreadRefreshes() throws Exception {
-        ProxyService service = new ProxyService(props("env-key", "env-model"), new LlmConfigState(), mapper);
+        ModelCatalogService service = TestServices.catalog(props("env-key", "env-model"), mapper);
         service.openrouterModels();
-        var lockField = ProxyService.class.getDeclaredField("openrouterModelsRefresh");
+        var lockField = ModelCatalogService.class.getDeclaredField("openrouterModelsRefresh");
         lockField.setAccessible(true);
-        var lock = (java.util.concurrent.locks.ReentrantLock) lockField.get(service);
-        var cacheField = ProxyService.class.getDeclaredField("openrouterModelsCache");
+        var lock = (ReentrantLock) lockField.get(service);
+        var cacheField = ModelCatalogService.class.getDeclaredField("openrouterModelsCache");
         cacheField.setAccessible(true);
         var cache = (AtomicReference<?>) cacheField.get(service);
         Object fresh = cache.get();
         var ctor = fresh.getClass().getDeclaredConstructors()[0];
         ctor.setAccessible(true);
         Object stale = ctor.newInstance(fresh.getClass().getRecordComponents()[0].getAccessor().invoke(fresh),
-                java.time.Instant.EPOCH);  // vencido
+                Instant.EPOCH);  // vencido
         AtomicReference.class.getMethod("set", Object.class).invoke(cache, stale);
         upstream.stop(0);
 
         Thread holder = new Thread(lock::lock);  // simula outra thread presa na chamada HTTP
         holder.start();
         holder.join();
-        var response = java.util.concurrent.CompletableFuture.supplyAsync(service::openrouterModels)
-                .get(5, java.util.concurrent.TimeUnit.SECONDS);
+        var response = CompletableFuture.supplyAsync(service::openrouterModels)
+                .get(5, TimeUnit.SECONDS);
 
         assertThat(response.getStatusCode().value()).isEqualTo(200);
         assertThat(mapper.readTree(response.getBody()).get("data")).hasSize(2);
@@ -438,14 +542,14 @@ class ProxyServiceTest {
     /** I1: a body that is not a JSON object is the caller's error. */
     @Test
     void nonObjectRequestBodyIsRejectedAsInvalidRequest() {
-        ProxyService service = new ProxyService(props("env-key", "env-model"), new LlmConfigState(), mapper);
+        ProxyService service = TestServices.proxy(props("env-key", "env-model"), new LlmConfigState(), mapper);
 
-        for (String body : java.util.List.of("[]", "\"x\"", "{", "null", "")) {
-            org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.completions(body, "local", null))
+        for (String body : List.of("[]", "\"x\"", "{", "null", "")) {
+            Assertions.assertThatThrownBy(() -> service.completions(body, "auto", null))
                     .as(body).isInstanceOf(InvalidRequestException.class);
-            org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.embeddings(body))
+            Assertions.assertThatThrownBy(() -> service.embeddings(body))
                     .as(body).isInstanceOf(InvalidRequestException.class);
-            org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.rerank(body))
+            Assertions.assertThatThrownBy(() -> service.rerank(body))
                     .as(body).isInstanceOf(InvalidRequestException.class);
         }
     }
@@ -458,11 +562,11 @@ class ProxyServiceTest {
     @Test
     void completionsPrependsGuardrailToExistingTextualSystemMessage() throws Exception {
         ProxyProperties props = props("env-key", "env-model");
-        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+        ProxyService service = TestServices.proxy(props, new LlmConfigState(), mapper);
 
         service.completions(
                 "{\"messages\":[{\"role\":\"system\",\"content\":\"Você é um analista financeiro.\"}]}",
-                "local", null);
+                "auto", null);
 
         assertThat(lastMessages.get()).hasSize(1);
         String content = lastMessages.get().get(0).path("content").asText();
@@ -474,11 +578,11 @@ class ProxyServiceTest {
     @Test
     void completionsInsertsGuardrailAsNewSystemMessageWhenNoneExists() throws Exception {
         ProxyProperties props = props("env-key", "env-model");
-        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+        ProxyService service = TestServices.proxy(props, new LlmConfigState(), mapper);
 
         service.completions(
                 "{\"messages\":[{\"role\":\"user\",\"content\":\"qual o ROE da VALE3?\"}]}",
-                "local", null);
+                "auto", null);
 
         assertThat(lastMessages.get()).hasSize(2);
         assertThat(lastMessages.get().get(0).path("role").asText()).isEqualTo("system");
@@ -492,11 +596,11 @@ class ProxyServiceTest {
     @Test
     void completionsInsertsSeparateMessageWhenFirstSystemMessageIsMultimodal() throws Exception {
         ProxyProperties props = props("env-key", "env-model");
-        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+        ProxyService service = TestServices.proxy(props, new LlmConfigState(), mapper);
 
         service.completions(
                 "{\"messages\":[{\"role\":\"system\",\"content\":[{\"type\":\"text\",\"text\":\"instrução\"}]}]}",
-                "local", null);
+                "auto", null);
 
         assertThat(lastMessages.get()).hasSize(2);
         assertThat(lastMessages.get().get(0).path("role").asText()).isEqualTo("system");
@@ -508,7 +612,7 @@ class ProxyServiceTest {
     @Test
     void completionsForwardsToolChoiceUnchanged() throws Exception {
         ProxyProperties props = props("env-key", "env-model");
-        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+        ProxyService service = TestServices.proxy(props, new LlmConfigState(), mapper);
 
         service.completions(
                 "{\"messages\":[{\"role\":\"user\",\"content\":\"busque ROE\"}],"
@@ -522,12 +626,12 @@ class ProxyServiceTest {
     @Test
     void completionsSkipsGuardrailForResponseFormatRequests() throws Exception {
         ProxyProperties props = props("env-key", "env-model");
-        ProxyService service = new ProxyService(props, new LlmConfigState(), mapper);
+        ProxyService service = TestServices.proxy(props, new LlmConfigState(), mapper);
 
         service.completions(
                 "{\"messages\":[{\"role\":\"user\",\"content\":\"extraia os campos\"}],"
                         + "\"response_format\":{\"type\":\"json_object\"}}",
-                "local", null);
+                "auto", null);
 
         assertThat(lastMessages.get()).hasSize(1);
         assertThat(lastMessages.get().get(0).path("role").asText()).isEqualTo("user");
@@ -537,12 +641,12 @@ class ProxyServiceTest {
         ProxyProperties.Upstream up = new ProxyProperties.Upstream(baseUrl(), "k", "anthropic/claude-haiku-5.5", 0.0,
                 usageAccounting, null);
         return new ProxyProperties(up, up, up, up, new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "",
-                java.util.List.of("qwen3-14b"), java.util.List.of());
+                List.of("qwen3-14b"), List.of());
     }
 
     @Test
     void openRouterRequestAsksForUsageAccountingAndStreamUsage() throws Exception {
-        ProxyService service = new ProxyService(openrouterProps(null), new LlmConfigState(), mapper);
+        ProxyService service = TestServices.proxy(openrouterProps(null), new LlmConfigState(), mapper);
 
         service.completions("{\"messages\":[],\"stream\":true}", "openrouter", null)
                 .getBody().writeTo(new ByteArrayOutputStream());
@@ -553,7 +657,7 @@ class ProxyServiceTest {
 
     @Test
     void usageAccountingKeepsCallerValuesAndSkipsStreamOptionsWithoutStream() throws Exception {
-        ProxyService service = new ProxyService(openrouterProps(null), new LlmConfigState(), mapper);
+        ProxyService service = TestServices.proxy(openrouterProps(null), new LlmConfigState(), mapper);
 
         service.completions("{\"messages\":[],\"usage\":{\"include\":false}}", "openrouter", null);
 
@@ -563,11 +667,11 @@ class ProxyServiceTest {
 
     @Test
     void usageAccountingIsNotInjectedOnLocalRouteOrWhenToggledOff() throws Exception {
-        new ProxyService(props("k", "m"), new LlmConfigState(), mapper)
-                .completions("{\"messages\":[]}", "local", null);
+        TestServices.proxy(props("k", "m"), new LlmConfigState(), mapper)
+                .completions("{\"messages\":[]}", "auto", null);
         assertThat(lastBody.get().has("usage")).isFalse();
 
-        new ProxyService(openrouterProps(false), new LlmConfigState(), mapper)
+        TestServices.proxy(openrouterProps(false), new LlmConfigState(), mapper)
                 .completions("{\"messages\":[]}", "openrouter", null);
         assertThat(lastBody.get().has("usage")).isFalse();
     }
@@ -584,12 +688,12 @@ class ProxyServiceTest {
             exchange.getResponseBody().write(response);
             exchange.close();
         });
-        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ProxyService.class);
+        var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("dev.giovane.llmproxy.service");
         var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
         appender.start();
         logger.addAppender(appender);
         try {
-            new ProxyService(openrouterProps(null), new LlmConfigState(), mapper)
+            TestServices.proxy(openrouterProps(null), new LlmConfigState(), mapper)
                     .completions("{\"messages\":[],\"stream\":true}", "openrouter", null)
                     .getBody().writeTo(new ByteArrayOutputStream());
         } finally {
@@ -602,13 +706,13 @@ class ProxyServiceTest {
 
     @Test
     void nonStreamLogShowsNotAvailableWhenUpstreamOmitsCachedAndCost() throws Exception {
-        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ProxyService.class);
+        var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("dev.giovane.llmproxy.service");
         var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
         appender.start();
         logger.addAppender(appender);
         try {
-            new ProxyService(props("k", "m"), new LlmConfigState(), mapper)
-                    .completions("{\"messages\":[]}", "local", null);
+            TestServices.proxy(props("k", "m"), new LlmConfigState(), mapper)
+                    .completions("{\"messages\":[]}", "auto", null);
         } finally {
             logger.detachAppender(appender);
         }
@@ -622,17 +726,17 @@ class ProxyServiceTest {
         String deadUrl = baseUrl();
         upstream.stop(0);
         ProxyProperties.Upstream up = new ProxyProperties.Upstream(deadUrl, "k", "m", null);
-        ProxyService service = new ProxyService(new ProxyProperties(up, up, up, up,
-                new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "", java.util.List.of(), java.util.List.of()),
+        ProxyService service = TestServices.proxy(new ProxyProperties(up, up, up, up,
+                new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "", List.of(), List.of()),
                 new LlmConfigState(), mapper);
-        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ProxyService.class);
+        var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("dev.giovane.llmproxy.service");
         var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
         appender.start();
         logger.addAppender(appender);
         try {
-            org.assertj.core.api.Assertions.assertThatThrownBy(() ->
-                    service.completions("{\"messages\":[],\"stream\":true}", "local", null))
-                    .isInstanceOf(org.springframework.web.client.ResourceAccessException.class);
+            Assertions.assertThatThrownBy(() ->
+                    service.completions("{\"messages\":[],\"stream\":true}", "auto", null))
+                    .isInstanceOf(ResourceAccessException.class);
         } finally {
             logger.detachAppender(appender);
         }
@@ -654,12 +758,12 @@ class ProxyServiceTest {
             exchange.getResponseBody().write(response);
             exchange.close();
         });
-        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ProxyService.class);
+        var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("dev.giovane.llmproxy.service");
         var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
         appender.start();
         logger.addAppender(appender);
         try {
-            new ProxyService(openrouterProps(null), new LlmConfigState(), mapper)
+            TestServices.proxy(openrouterProps(null), new LlmConfigState(), mapper)
                     .completions("{\"messages\":[],\"stream\":true}", "openrouter", null)
                     .getBody().writeTo(new ByteArrayOutputStream());
         } finally {
@@ -668,6 +772,81 @@ class ProxyServiceTest {
         assertThat(appender.list.stream().map(e -> e.getFormattedMessage()))
                 .anyMatch(m -> m.contains("promptTokens=7") && m.contains("completionTokens=2"))
                 .anyMatch(m -> m.contains("provider=Anthropic") && m.contains("(stream)"));
+    }
+
+    /** N1/D5: upstream fecha abruptamente no meio do stream -> ERROR "backend indisponível" + outcome=upstream_interrompido. */
+    @Test
+    void streamUpstreamCutMidwayLogsErrorAndOutcome() throws Exception {
+        // HttpServer do JDK sempre termina o chunked limpo; socket cru corta sem o chunk terminador.
+        var raw = new ServerSocket(0);
+        Thread t = new Thread(() -> {
+            try (var sock = raw.accept()) {
+                var in = sock.getInputStream();
+                byte[] b = new byte[8192];
+                in.read(b); // cabeçalhos + corpo pequeno da requisição
+                var os = sock.getOutputStream();
+                os.write(("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+                        + "Transfer-Encoding: chunked\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+                for (String c : new String[] {"a", "b"}) {
+                    String ev = "data: {\"choices\":[{\"delta\":{\"content\":\"" + c + "\"}}]}\n\n";
+                    os.write((Integer.toHexString(ev.length()) + "\r\n" + ev + "\r\n").getBytes(StandardCharsets.UTF_8));
+                    os.flush();
+                }
+                sock.setSoLinger(true, 0); // RST: queda abrupta
+            } catch (IOException ignored) {
+                // teste
+            }
+        });
+        t.start();
+        ProxyProperties.Upstream up = new ProxyProperties.Upstream("http://localhost:" + raw.getLocalPort(), "k",
+                "anthropic/claude-haiku-5.5", 0.0, null, null);
+        ProxyProperties rawProps = new ProxyProperties(up, up, up, up,
+                new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "", List.of(), List.of());
+        var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("dev.giovane.llmproxy.service");
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            TestServices.proxy(rawProps, new LlmConfigState(), mapper)
+                    .completions("{\"messages\":[],\"stream\":true}", "openrouter", null)
+                    .getBody().writeTo(new ByteArrayOutputStream());
+        } finally {
+            logger.detachAppender(appender);
+            raw.close();
+        }
+        assertThat(appender.list).anyMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR
+                && e.getFormattedMessage().contains("backend indisponível"));
+        assertThat(appender.list.stream().map(e -> e.getFormattedMessage()))
+                .anyMatch(m -> m.contains("outcome=upstream_interrompido") && m.contains("(stream)"));
+    }
+
+    /** N1/D5: cliente cai (write falha) -> sem ERROR, outcome=cliente_desconectou. */
+    @Test
+    void streamClientGoneLogsNoErrorAndOutcome() throws Exception {
+        upstream.removeContext("/v1/chat/completions");
+        upstream.createContext("/v1/chat/completions", exchange -> {
+            byte[] response = "data: {\"choices\":[]}\n\ndata: [DONE]\n\n".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("dev.giovane.llmproxy.service");
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            TestServices.proxy(openrouterProps(null), new LlmConfigState(), mapper)
+                    .completions("{\"messages\":[],\"stream\":true}", "openrouter", null)
+                    .getBody().writeTo(new OutputStream() {
+                        @Override public void write(int b) throws IOException { throw new IOException("Broken pipe"); }
+                    });
+        } finally {
+            logger.detachAppender(appender);
+        }
+        assertThat(appender.list).noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
+        assertThat(appender.list.stream().map(e -> e.getFormattedMessage()))
+                .anyMatch(m -> m.contains("outcome=cliente_desconectou") && m.contains("(stream)"));
     }
 
     /** SPEC-chat-backlog C.I4: tools e conteúdo em partes entram na estimativa que decide o roteamento. */
@@ -688,9 +867,68 @@ class ProxyServiceTest {
     private ProxyService cacheService(Boolean promptCache) {
         ProxyProperties.Upstream up = new ProxyProperties.Upstream(baseUrl(), "k", "anthropic/claude-haiku-5.5", 0.0,
                 null, promptCache);
-        return new ProxyService(new ProxyProperties(up, up, up, up,
-                new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "", java.util.List.of(),
-                java.util.List.of()), new LlmConfigState(), mapper);
+        return TestServices.proxy(new ProxyProperties(up, up, up, up,
+                new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "", List.of(),
+                List.of()), new LlmConfigState(), mapper);
+    }
+
+    private ProxyService reasoningService(Boolean reasoningDefaultOff) {
+        ProxyProperties.Upstream up = new ProxyProperties.Upstream(baseUrl(), "k", "anthropic/claude-haiku-5.5", 0.0,
+                null, null, reasoningDefaultOff);
+        return TestServices.proxy(new ProxyProperties(up, up, up, up,
+                new ProxyProperties.Routing(8000, Duration.ofMinutes(1)), "", List.of(),
+                List.of()), new LlmConfigState(), mapper);
+    }
+
+    private static final String PLAIN_CHAT =
+            "{\"model\":\"x/y\",\"messages\":[{\"role\":\"user\",\"content\":\"oi\"}]}";
+
+    @Test
+    void reasoningDefaultOffInjectedOnOpenRouterWhenCallerSilent() throws Exception {
+        reasoningService(null).completions(PLAIN_CHAT, "openrouter", null);
+        assertThat(lastBody.get().path("reasoning").path("enabled").asBoolean(true)).isFalse();
+    }
+
+    @Test
+    void reasoningDefaultOffKeepsCallerReasoning() throws Exception {
+        reasoningService(null).completions(PLAIN_CHAT.replace("\"messages\"", "\"reasoning\":{\"enabled\":true},\"messages\""),
+                "openrouter", null);
+        assertThat(lastBody.get().path("reasoning").path("enabled").asBoolean(false)).isTrue();
+        reasoningService(null).completions(PLAIN_CHAT.replace("\"messages\"", "\"reasoning_effort\":\"low\",\"messages\""),
+                "openrouter", null);
+        assertThat(lastBody.get().has("reasoning")).isFalse();
+    }
+
+    @Test
+    void reasoningDefaultOffSkipsLocalRouteAndToggleOff() throws Exception {
+        reasoningService(null).completions(PLAIN_CHAT, "llama-cpp", null);
+        assertThat(lastBody.get().has("reasoning")).isFalse();
+        reasoningService(false).completions(PLAIN_CHAT, "openrouter", null);
+        assertThat(lastBody.get().has("reasoning")).isFalse();
+    }
+
+    @Test
+    void reasoningDefaultOffSkippedWhenRequireParametersPinned() throws Exception {
+        String withTools = PLAIN_CHAT.replace("\"messages\"",
+                "\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"t\"}}],\"messages\"");
+        reasoningService(null).completions(withTools, "openrouter", null);
+        assertThat(lastBody.get().path("provider").path("require_parameters").asBoolean(false)).isTrue();
+        assertThat(lastBody.get().has("reasoning")).isFalse();
+    }
+
+    @Test
+    void reasoningDefaultOffSkippedWhenCallerSendsIncludeReasoning() throws Exception {
+        reasoningService(null).completions(
+                PLAIN_CHAT.replace("\"messages\"", "\"include_reasoning\":true,\"messages\""), "openrouter", null);
+        assertThat(lastBody.get().has("reasoning")).isFalse();
+    }
+
+    @Test
+    void reasoningDefaultOffSkippedWhenCallerPinsRequireParametersWithoutTools() throws Exception {
+        reasoningService(null).completions(
+                PLAIN_CHAT.replace("\"messages\"", "\"provider\":{\"require_parameters\":true},\"messages\""),
+                "openrouter", null);
+        assertThat(lastBody.get().has("reasoning")).isFalse();
     }
 
     private static final String CHAT_WITH_TOOL_TURN = "{\"model\":\"anthropic/claude-haiku-5.5\",\"messages\":["
@@ -725,7 +963,7 @@ class ProxyServiceTest {
                 "openrouter", null);
         assertThat(lastBody.get().toString()).doesNotContain("cache_control");
 
-        cacheService(null).completions(CHAT_WITH_TOOL_TURN, "local", null);
+        cacheService(null).completions(CHAT_WITH_TOOL_TURN, "auto", null);
         assertThat(lastBody.get().toString()).doesNotContain("cache_control");
 
         cacheService(false).completions(CHAT_WITH_TOOL_TURN, "openrouter", null);
@@ -757,5 +995,52 @@ class ProxyServiceTest {
         var parts = lastBody.get().path("messages").get(1).path("content"); // 0 = guardrail inserido
         assertThat(parts.get(0).has("cache_control")).isFalse();
         assertThat(parts.get(1).path("cache_control").path("type").asText()).isEqualTo("ephemeral");
+    }
+
+    /** N6: stream sem chunk final de usage (só "usage":null) loga n/d, não 0. */
+    @Test
+    void streamWithoutFinalUsageChunkLogsNotAvailableTokens() throws Exception {
+        String sse = "data: {\"choices\":[{\"delta\":{\"content\":\"oi\"}}],\"usage\":null}\n\n"
+                + "data: {\"choices\":[{\"delta\":{}}],\"usage\":null}\n\n"
+                + "data: [DONE]\n\n";
+        upstream.removeContext("/v1/chat/completions");
+        upstream.createContext("/v1/chat/completions", exchange -> {
+            byte[] response = sse.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("dev.giovane.llmproxy.service");
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            TestServices.proxy(openrouterProps(null), new LlmConfigState(), mapper)
+                    .completions("{\"messages\":[],\"stream\":true}", "openrouter", null)
+                    .getBody().writeTo(new ByteArrayOutputStream());
+        } finally {
+            logger.detachAppender(appender);
+        }
+        assertThat(appender.list.stream().map(e -> e.getFormattedMessage()))
+                .anyMatch(m -> m.contains("promptTokens=n/d") && m.contains("completionTokens=n/d")
+                        && m.contains("(stream)"));
+    }
+
+    /** N6: resposta não-stream sem usage numérico loga n/d. */
+    @Test
+    void nonStreamLogShowsNotAvailableTokensWhenUsageIsMissing() throws Exception {
+        var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("dev.giovane.llmproxy.service");
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            TestServices.proxy(props("k", "m"), new LlmConfigState(), mapper)
+                    .completions("{\"messages\":[]}", "auto", null);
+        } finally {
+            logger.detachAppender(appender);
+        }
+        assertThat(appender.list.stream().map(e -> e.getFormattedMessage()))
+                .anyMatch(m -> m.contains("promptTokens=n/d") && m.contains("completionTokens=n/d"));
     }
 }

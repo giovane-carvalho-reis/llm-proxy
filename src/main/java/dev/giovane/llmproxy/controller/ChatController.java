@@ -1,5 +1,6 @@
 package dev.giovane.llmproxy.controller;
 
+import dev.giovane.llmproxy.service.ModelCatalogService;
 import dev.giovane.llmproxy.service.ProxyService;
 
 import org.springframework.http.ResponseEntity;
@@ -21,9 +22,11 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 public class ChatController {
 
     private final ProxyService service;
+    private final ModelCatalogService catalog;
 
-    ChatController(ProxyService service) {
+    ChatController(ProxyService service, ModelCatalogService catalog) {
         this.service = service;
+        this.catalog = catalog;
     }
 
     // Declared return type must stay exactly ResponseEntity<StreamingResponseBody> (not
@@ -49,24 +52,24 @@ public class ChatController {
 
     @GetMapping("/health")
     ResponseEntity<String> health() {
-        return service.health();
+        return catalog.health();
     }
 
     @GetMapping("/v1/models")
     ResponseEntity<String> models() {
-        return service.models();
+        return catalog.models();
     }
 
     /** Same as /v1/models, filtered to chat-capable local models (excludes embeddings/rerank). */
     @GetMapping("/v1/models/chat")
     ResponseEntity<String> chatModels() {
-        return service.chatModels();
+        return catalog.chatModels();
     }
 
     /** OpenRouter catalog, filtered to models that support structured_outputs (JSON Schema
      * estrito) — o que o pipeline de extração de dividendos do cvm-pdf-processor exige. */
     @GetMapping("/v1/models/openrouter")
     ResponseEntity<String> openrouterModels() {
-        return service.openrouterModels();
+        return catalog.openrouterModels();
     }
 }

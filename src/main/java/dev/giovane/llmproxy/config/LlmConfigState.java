@@ -1,8 +1,12 @@
 package dev.giovane.llmproxy.config;
 
+import dev.giovane.llmproxy.router.Router;
+
 import org.springframework.stereotype.Component;
 
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 
 /**
  * In-memory-only runtime overrides for a subset of {@link ProxyProperties}. Nothing here is
@@ -40,29 +44,29 @@ public class LlmConfigState {
      * (used by the PUT endpoint to mean "field absent"); an empty string clears the override.
      */
     public void setOpenrouterApiKey(String value) {
-        if (value == null) {
-            return;
-        }
-        String next = value.isEmpty() ? null : value;
-        overrides.updateAndGet(o -> new Overrides(next, o.openrouterDefaultModel(), o.llamaCppDefaultModel()));
+        update(value, (o, v) -> new Overrides(v, o.openrouterDefaultModel(), o.llamaCppDefaultModel()));
     }
 
     /** Same "absent vs. empty vs. value" semantics as {@link #setOpenrouterApiKey(String)}. */
     public void setOpenrouterDefaultModel(String value) {
-        if (value == null) {
-            return;
-        }
-        String next = value.isEmpty() ? null : value;
-        overrides.updateAndGet(o -> new Overrides(o.openrouterApiKey(), next, o.llamaCppDefaultModel()));
+        update(value, (o, v) -> new Overrides(o.openrouterApiKey(), v, o.llamaCppDefaultModel()));
     }
 
     /** Same "absent vs. empty vs. value" semantics as {@link #setOpenrouterApiKey(String)}. */
     public void setLlamaCppDefaultModel(String value) {
+        update(value, (o, v) -> new Overrides(o.openrouterApiKey(), o.openrouterDefaultModel(), v));
+    }
+
+    private void update(String value, BiFunction<Overrides, String, Overrides> change) {
         if (value == null) {
             return;
         }
-        String next = value.isEmpty() ? null : value;
-        overrides.updateAndGet(o -> new Overrides(o.openrouterApiKey(), o.openrouterDefaultModel(), next));
+        String next = normalize(value);
+        overrides.updateAndGet(o -> change.apply(o, next));
+    }
+
+    private static String normalize(String value) {
+        return value.isEmpty() ? null : value;
     }
 
     /**
@@ -72,7 +76,7 @@ public class LlmConfigState {
      */
     public ProxyProperties.Upstream effective(String target, ProxyProperties.Upstream base) {
         Overrides current = overrides.get();
-        boolean openrouter = dev.giovane.llmproxy.router.Router.OPENROUTER.equals(target);
+        boolean openrouter = Router.OPENROUTER.equals(target);
         String apiKey = openrouter && current.openrouterApiKey() != null ? current.openrouterApiKey() : base.apiKey();
         String defaultModel = base.defaultModel();
         if (openrouter && current.openrouterDefaultModel() != null) {
@@ -80,7 +84,7 @@ public class LlmConfigState {
         } else if (!openrouter && current.llamaCppDefaultModel() != null) {
             defaultModel = current.llamaCppDefaultModel();
         }
-        if (apiKey == base.apiKey() && defaultModel == base.defaultModel()) {
+        if (Objects.equals(apiKey, base.apiKey()) && Objects.equals(defaultModel, base.defaultModel())) {
             return base;
         }
         return new ProxyProperties.Upstream(base.baseUrl(), apiKey, defaultModel, base.temperature());
