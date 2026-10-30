@@ -21,6 +21,9 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 
 /**
  * OpenAI-compatible reverse proxy logic. Forwards the request body verbatim (Jackson
@@ -38,6 +41,7 @@ public class ProxyService {
     private final RequestLogger requestLog;
     private final SseRelay sseRelay;
     private final String guardrailPrompt;
+    private final String guardrailVersion;
 
     public ProxyService(ProxyProperties props, LlmConfigState configState, ObjectMapper mapper, UpstreamHttp http,
             OpenRouterPayloadCustomizer customizer, RequestLogger requestLog, SseRelay sseRelay) {
@@ -49,6 +53,7 @@ public class ProxyService {
         this.requestLog = requestLog;
         this.sseRelay = sseRelay;
         this.guardrailPrompt = loadGuardrailPrompt();
+        this.guardrailVersion = sha256Hex(guardrailPrompt);
     }
 
     // Declared as ResponseEntity<StreamingResponseBody> (not ResponseEntity<?>) all the way
@@ -152,6 +157,24 @@ public class ProxyService {
         }
         return json;
     }
+    /** SHA-256 hex (lowercase) of the loaded guardrail text. */
+    public String guardrailVersion() {
+        return guardrailVersion;
+    }
+
+    static String stripMaintenanceComment(String raw) {
+        return raw.replaceFirst("(?s)^\\s*<!--.*?-->", "").strip();
+    }
+
+    static String sha256Hex(String text) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(text.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 indisponível na JVM", e);
+        }
+    }
+
     /**
      * Loads the guardrail text, dropping a leading HTML comment block. That block holds the
      * maintenance note for whoever edits the file (see guardrails.md) — it is for humans, and
@@ -161,7 +184,7 @@ public class ProxyService {
         try {
             String raw = new String(new ClassPathResource("prompts/guardrails.md").getInputStream().readAllBytes(),
                     StandardCharsets.UTF_8);
-            return raw.replaceFirst("(?s)^\\s*<!--.*?-->", "").strip();
+            return stripMaintenanceComment(raw);
         } catch (IOException e) {
             throw new IllegalStateException("prompts/guardrails.md ausente do classpath", e);
         }

@@ -11,6 +11,8 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.util.Map;
+
 /**
  * OpenAI-compatible reverse proxy endpoints. Callers never learn which backend ran —
  * they just send a model name and, optionally, routing hints:
@@ -48,6 +50,12 @@ public class ChatController {
     @PostMapping("/v1/rerank")
     ResponseEntity<String> rerank(@RequestBody String body) throws Exception {
         return service.rerank(body);
+    }
+
+    /** SHA-256 do texto do guardrail em uso; sem token, como /health. */
+    @GetMapping("/guardrail-version")
+    Map<String, String> guardrailVersion() {
+        return Map.of("version", service.guardrailVersion());
     }
 
     @GetMapping("/health")

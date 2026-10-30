@@ -14,7 +14,7 @@ import java.security.MessageDigest;
 /**
  * Exige o token de serviço ({@code X-Internal-Token}) em toda rota {@code /v1/**}
  * (SPEC-permissoes-admin-investidor D1/D2). Sem {@code INTERNAL_TOKEN} o serviço não sobe:
- * a propriedade não tem default, então nunca abre por omissão de config. {@code /health} fica livre.
+ * a propriedade não tem default, então nunca abre por omissão de config. {@code /health} e {@code /guardrail-version} (fora de {@code /v1/**}; só o hash) ficam livres.
  */
 @Component
 public class InternalTokenInterceptor implements HandlerInterceptor {

@@ -5,7 +5,7 @@ import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 /**
- * {@link InternalTokenInterceptor} guards every {@code /v1/**} route (only {@code /health} stays open);
+ * {@link InternalTokenInterceptor} guards every {@code /v1/**} route (only {@code /health} and {@code /guardrail-version}, which exposes just a hash, stay open);
  * {@link AdminTokenInterceptor} additionally guards {@code /v1/config/**}.
  */
 @Configuration
