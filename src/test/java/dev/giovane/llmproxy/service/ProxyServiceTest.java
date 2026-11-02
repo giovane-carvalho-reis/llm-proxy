@@ -300,6 +300,90 @@ class ProxyServiceTest {
         assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo(sseBody);
     }
 
+    private void upstreamReplies(String contentType, String body) {
+        upstream.removeContext("/v1/chat/completions");
+        upstream.createContext("/v1/chat/completions", exchange -> {
+            lastBody.set(mapper.readTree(exchange.getRequestBody()));
+            byte[] response = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", contentType);
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+    }
+
+    /** SPEC-camada-de-evidencia-ipe F2: reasoning do chamador chega intacto ao OpenRouter (ADR-019 não sobrescreve). */
+    @Test
+    void callerReasoningObjectReachesOpenRouterIntact() throws Exception {
+        ProxyService service = TestServices.proxy(props("k", "m"), new LlmConfigState(), mapper);
+
+        service.completions("{\"messages\":[],\"reasoning\":{\"effort\":\"high\"}}", "openrouter", null);
+
+        assertThat(lastBody.get().path("reasoning").toString()).isEqualTo("{\"effort\":\"high\"}");
+    }
+
+    @Test
+    void callerReasoningEffortReachesOpenRouterIntactWithoutDefaultOff() throws Exception {
+        ProxyService service = TestServices.proxy(props("k", "m"), new LlmConfigState(), mapper);
+
+        service.completions("{\"messages\":[],\"reasoning_effort\":\"high\"}", "openrouter", null);
+
+        assertThat(lastBody.get().path("reasoning_effort").asText()).isEqualTo("high");
+        assertThat(lastBody.get().has("reasoning")).isFalse();
+    }
+
+    @Test
+    void usageCostIsRelayedInBodyAndExposedInXLlmCostHeader() throws Exception {
+        String body = "{\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"cost\":0.00123}}";
+        upstreamReplies("application/json", body);
+        ProxyService service = TestServices.proxy(props("k", "m"), new LlmConfigState(), mapper);
+
+        ResponseEntity<StreamingResponseBody> response = service.completions("{\"messages\":[]}", "openrouter", null);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        response.getBody().writeTo(out);
+        assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo(body);
+        assertThat(response.getHeaders().get("X-LLM-Cost")).containsExactly("0.00123");
+        assertThat(lastBody.get().path("usage").path("include").asBoolean()).isTrue();
+    }
+
+    @Test
+    void tinyCostHeaderIsPlainDecimalNotScientific() throws Exception {
+        upstreamReplies("application/json", "{\"choices\":[],\"usage\":{\"cost\":1E-7}}");
+        ProxyService service = TestServices.proxy(props("k", "m"), new LlmConfigState(), mapper);
+
+        ResponseEntity<StreamingResponseBody> response = service.completions("{\"messages\":[]}", "openrouter", null);
+
+        assertThat(response.getHeaders().get("X-LLM-Cost")).containsExactly("0.0000001");
+    }
+
+    @Test
+    void xLlmCostHeaderAbsentWhenUpstreamHasNoCost() throws Exception {
+        upstreamReplies("application/json", "{\"choices\":[],\"usage\":{\"prompt_tokens\":10}}");
+        ProxyService service = TestServices.proxy(props("k", "m"), new LlmConfigState(), mapper);
+
+        ResponseEntity<StreamingResponseBody> response = service.completions("{\"messages\":[]}", "openrouter", null);
+
+        assertThat(response.getHeaders().containsKey("X-LLM-Cost")).isFalse();
+    }
+
+    @Test
+    void streamLastChunkWithUsageCostIsRelayedIntact() throws Exception {
+        String sse = "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n"
+                + "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"cost\":0.00123}}\n\n"
+                + "data: [DONE]\n\n";
+        upstreamReplies("text/event-stream", sse);
+        ProxyService service = TestServices.proxy(props("k", "m"), new LlmConfigState(), mapper);
+
+        ResponseEntity<StreamingResponseBody> response =
+                service.completions("{\"messages\":[],\"stream\":true}", "openrouter", null);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        response.getBody().writeTo(out);
+        assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo(sse);
+        assertThat(response.getHeaders().containsKey("X-LLM-Cost")).isFalse();
+    }
+
     /** Regression: onStatus(s -> false, ...) never matched, so RestClient's default handler ran
      *  anyway and threw on every non-2xx — a 429 from the upstream reached the caller as an
      *  opaque Spring 500 instead of the real 429 + error body. */

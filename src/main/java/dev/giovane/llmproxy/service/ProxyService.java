@@ -14,6 +14,7 @@ import dev.giovane.llmproxy.router.Router;
 import dev.giovane.llmproxy.upstream.UpstreamFailure;
 
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
@@ -55,6 +56,14 @@ public class ProxyService {
         this.guardrailPrompt = loadGuardrailPrompt();
         this.guardrailVersion = sha256Hex(guardrailPrompt);
     }
+
+    /**
+     * Custo do request em USD ({@code usage.cost} do OpenRouter, via usage.include — ADR-016/018). Aditivo: o corpo
+     * segue intacto. Só no não-stream e só quando o upstream traz custo (ausente em llama.cpp). No stream o header
+     * não se aplica (já enviado antes do fim da geração): o chamador lê {@code usage.cost} do último chunk, repassado
+     * intacto.
+     */
+    public static final String COST_HEADER = "X-LLM-Cost";
 
     // Declared as ResponseEntity<StreamingResponseBody> (not ResponseEntity<?>) all the way
     // through to the controller — Spring's StreamingResponseBodyReturnValueHandler.
@@ -115,7 +124,13 @@ public class ProxyService {
                 out.write(response.getBody().getBytes(StandardCharsets.UTF_8));
             }
         };
-        return ResponseEntity.status(response.getStatusCode()).headers(response.getHeaders()).body(wrapped);
+        HttpHeaders headers = new HttpHeaders();
+        headers.putAll(response.getHeaders());
+        JsonNode cost = resp.path("usage").path("cost");
+        if (cost.isNumber()) {
+            headers.set(COST_HEADER, cost.decimalValue().stripTrailingZeros().toPlainString());
+        }
+        return ResponseEntity.status(response.getStatusCode()).headers(headers).body(wrapped);
     }
     /** Embeddings passthrough — always the local bge-m3 llama-server; no routing to decide. */
     public ResponseEntity<String> embeddings(String body) throws Exception {
