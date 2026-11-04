@@ -51,9 +51,13 @@ class SseRelay {
         var spec = http.post(up, path);
         long startedAt = System.currentTimeMillis();
         try {
-            return spec.body(payload).exchange((req, res) ->
-                    ResponseEntity.status(res.getStatusCode()).headers(relayedHeaders(res))
-                            .body((StreamingResponseBody) out -> copy(res, out, target, request, startedAt)), false);
+            return spec.body(payload).exchange((req, res) -> {
+                if (res.getStatusCode().isError()) {
+                    requestLog.upstreamErrorStatus(path, up.baseUrl(), res.getStatusCode().value(), null);
+                }
+                return ResponseEntity.status(res.getStatusCode()).headers(relayedHeaders(res))
+                        .body((StreamingResponseBody) out -> copy(res, out, target, request, startedAt));
+            }, false);
         } catch (RestClientException e) {
             // SPEC-chat-backlog C.C2: a fase 2 do chat é stream — sem isto o alarme do Loki nunca via o backend caído.
             if (UpstreamFailure.classify(e) != null) {

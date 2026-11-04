@@ -92,6 +92,48 @@ class ApiExceptionHandlerTest {
     }
 
     @Test
+    void chatConnectionRefusedReturns502UpstreamUnavailable() throws Exception {
+        mvcFor("http://localhost:1", Duration.ofMinutes(1), null)
+                .perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"model\":\"qwen3-14b\",\"messages\":[{\"role\":\"user\",\"content\":\"oi\"}]}"))
+                .andExpect(status().isBadGateway())
+                .andExpect(jsonPath("$.error.type").value("upstream_unavailable"))
+                .andExpect(jsonPath("$.error.message").value(Matchers.startsWith("backend indisponível: ")));
+    }
+
+    @Test
+    void upstream400TextPlainIsRelayedIntactAndLogsWarn() throws Exception {
+        var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("dev.giovane.llmproxy.service");
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        server.createContext("/", exchange -> {
+            byte[] body = "could not find real modelID for qwen3-14b".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/plain; charset=utf-8");
+            exchange.sendResponseHeaders(400, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            mvcFor("http://localhost:" + server.getAddress().getPort(), Duration.ofSeconds(5), null)
+                    .perform(post("/v1/chat/completions").contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"model\":\"qwen3-14b\",\"messages\":[{\"role\":\"user\",\"content\":\"oi\"}]}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                            .string("could not find real modelID for qwen3-14b"));
+        } finally {
+            server.stop(0);
+            logger.detachAppender(appender);
+        }
+        Assertions.assertThat(appender.list)
+                .anyMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN
+                        && e.getFormattedMessage().contains("status=400")
+                        && e.getFormattedMessage().contains("could not find real modelID"));
+    }
+
+    @Test
     void upstreamThatDoesNotAnswerWithinReadTimeoutReturns504() throws Exception {
         HttpServer server = hangingServer();
         try {

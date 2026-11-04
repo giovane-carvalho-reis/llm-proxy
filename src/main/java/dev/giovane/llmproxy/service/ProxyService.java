@@ -258,7 +258,7 @@ public class ProxyService {
     private ResponseEntity<String> forward(ProxyProperties.Upstream up, String path, String payload) {
         var spec = http.post(up, path);
         try {
-            return UpstreamHttp.stripHopByHopHeaders(spec.body(payload)
+            ResponseEntity<String> relayed = UpstreamHttp.stripHopByHopHeaders(spec.body(payload)
                     .retrieve()
                     // s -> true: every status (including 4xx/5xx) is "handled" by this no-op, so
                     // RestClient's own exception-throwing default never runs and the caller gets the
@@ -266,6 +266,10 @@ public class ProxyService {
                     // not as an opaque Spring 500.
                     .onStatus(s -> true, (req, res) -> { })
                     .toEntity(String.class));
+            if (relayed.getStatusCode().isError()) {
+                requestLog.upstreamErrorStatus(path, up.baseUrl(), relayed.getStatusCode().value(), relayed.getBody());
+            }
+            return relayed;
         } catch (RestClientException e) {
             if (UpstreamFailure.classify(e) != null) {
                 requestLog.backendDownThrottled(up.baseUrl(), path, e);

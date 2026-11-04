@@ -118,4 +118,11 @@ class RequestLogger {
         lastBackendDownLog.put(baseUrl, now);
         log.error("backend indisponível | baseUrl={} path={} causa={}", baseUrl, path, cause.getMessage());
     }
+
+    /** Upstream respondeu 4xx/5xx (repassado como está): registra a causa. Corpo null = stream (não lido). */
+    void upstreamErrorStatus(String path, String baseUrl, int status, String body) {
+        String snippet = body == null ? "(stream, corpo não lido)"
+                : body.substring(0, Math.min(body.length(), 200)).replaceAll("\\s+", " ");
+        log.warn("upstream respondeu erro | baseUrl={} path={} status={} corpo={}", baseUrl, path, status, snippet);
+    }
 }
