@@ -55,7 +55,7 @@ class InternalTokenInterceptorTest {
     @Test
     void usageRoutesAcceptTheServiceToken() throws Exception {
         StreamingResponseBody empty = out -> { };
-        when(proxyService.completions(anyString(), anyString(), any())).thenReturn(ResponseEntity.ok(empty));
+        when(proxyService.completions(anyString(), anyString(), any(), any())).thenReturn(ResponseEntity.ok(empty));
         mockMvc.perform(post("/v1/chat/completions").header("X-Internal-Token", "test-internal-token")
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isOk());

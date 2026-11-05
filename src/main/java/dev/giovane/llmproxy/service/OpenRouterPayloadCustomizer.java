@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import dev.giovane.llmproxy.config.ProxyProperties;
 import dev.giovane.llmproxy.router.Router;
+import dev.giovane.llmproxy.task.LlmTask;
 
 import org.springframework.stereotype.Component;
 
@@ -20,6 +21,36 @@ class OpenRouterPayloadCustomizer {
     OpenRouterPayloadCustomizer(ProxyProperties props, ObjectMapper mapper) {
         this.props = props;
         this.mapper = mapper;
+    }
+
+    void customize(ObjectNode json, String target, ProxyProperties.Upstream up, LlmTask task) {
+        customize(json, target, up);
+        if (task == LlmTask.IPE_SUMMARY) {
+            applyIpeSummary(json, Router.OPENROUTER.equals(target));
+        }
+    }
+
+    /**
+     * Tarefa {@code ipe-summary}: determinística e sem raciocínio, ignorando o que o chamador mandou. Roda depois do
+     * {@link #customize(ObjectNode, String, ProxyProperties.Upstream)} base (sobrescreve temperature/reasoning).
+     * OpenRouter: {@code reasoning:{enabled:false}} (mesmo com require_parameters: exceção ao ADR-019, registrada no REV da F1 — pedido explícito da tarefa);
+     * llama.cpp: {@code chat_template_kwargs.enable_thinking=false}. Modelo que rejeita temperature no OpenRouter
+     * continua sem o campo (ver base).
+     */
+    private void applyIpeSummary(ObjectNode json, boolean openrouter) {
+        json.remove("reasoning");
+        json.remove("reasoning_effort");
+        json.remove("include_reasoning");
+        if (!(openrouter && props.rejectsTemperature(json.path("model").asText(null)))) {
+            json.put("temperature", 0);
+        }
+        if (openrouter) {
+            json.putObject("reasoning").put("enabled", false);
+        } else {
+            ObjectNode kwargs = json.path("chat_template_kwargs") instanceof ObjectNode existing
+                    ? existing : json.putObject("chat_template_kwargs");
+            kwargs.put("enable_thinking", false);
+        }
     }
 
     void customize(ObjectNode json, String target, ProxyProperties.Upstream up) {

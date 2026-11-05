@@ -16,6 +16,7 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -28,9 +29,13 @@ class ApiExceptionHandler {
 
     @ExceptionHandler(InvalidRequestException.class)
     ResponseEntity<Map<String, Object>> invalidRequest(InvalidRequestException e) {
-        return ResponseEntity.badRequest().body(Map.of("error", Map.of(
-                "message", e.getMessage(),
-                "type", "invalid_request_error")));
+        Map<String, Object> error = new LinkedHashMap<>();
+        error.put("message", e.getMessage());
+        error.put("type", "invalid_request_error");
+        if (e.code() != null) {
+            error.put("code", e.code());
+        }
+        return ResponseEntity.badRequest().body(Map.of("error", error));
     }
 
     private static final Pattern URI_IN_MESSAGE = Pattern.compile("for \"([^\"]+)\"");

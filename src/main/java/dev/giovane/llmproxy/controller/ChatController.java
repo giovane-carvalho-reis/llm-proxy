@@ -19,6 +19,7 @@ import java.util.Map;
  *
  *   X-Llm-Route:    llama-cpp | openrouter | auto   (default auto)
  *   X-Llm-Priority: speed                            (only meaningful in auto)
+ *   X-Llm-Task:     ipe-summary                      (fixes temperature 0 and reasoning off; unknown -> 400)
  */
 @RestController
 public class ChatController {
@@ -38,8 +39,9 @@ public class ChatController {
     ResponseEntity<StreamingResponseBody> completions(
             @RequestBody String body,
             @RequestHeader(value = "X-Llm-Route", defaultValue = "auto") String route,
-            @RequestHeader(value = "X-Llm-Priority", required = false) String priority) throws Exception {
-        return service.completions(body, route, priority);
+            @RequestHeader(value = "X-Llm-Priority", required = false) String priority,
+            @RequestHeader(value = "X-Llm-Task", required = false) String task) throws Exception {
+        return service.completions(body, route, priority, task);
     }
 
     @PostMapping("/v1/embeddings")

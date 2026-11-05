@@ -58,6 +58,15 @@ class ApiExceptionHandlerTest {
         }
     }
 
+    @Test
+    void unknownLlmTaskReturns400WithCode() throws Exception {
+        mvc.perform(post("/v1/chat/completions").header("X-Llm-Task", "xyz")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"messages\":[]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.type").value("invalid_request_error"))
+                .andExpect(jsonPath("$.error.code").value("TAREFA_DESCONHECIDA"));
+    }
+
     private static MockMvc mvcFor(String baseUrl, Duration read, Duration catalogRead) {
         ProxyProperties.Upstream up = new ProxyProperties.Upstream(baseUrl, null, "m", null);
         ProxyProperties props = new ProxyProperties(up, up, up, up,

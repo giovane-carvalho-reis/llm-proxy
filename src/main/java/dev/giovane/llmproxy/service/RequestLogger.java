@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.MissingNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import dev.giovane.llmproxy.router.Router;
+import dev.giovane.llmproxy.task.LlmTask;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -66,21 +67,23 @@ class RequestLogger {
      * from the upstream's own OpenAI-shaped "usage" object; missing on some llama.cpp builds, so
      * "n/d" there means "not reported", never "zero tokens" (N6).
      */
-    void requestSummary(String target, ObjectNode request, JsonNode resp, int status, long latencyMs) {
+    void requestSummary(String target, ObjectNode request, JsonNode resp, int status, long latencyMs,
+            LlmTask task) {
         JsonNode usage = resp.path("usage");
         // "timings" é o mesmo campo lido por draftAcceptance — builds sem --spec-type draft-mtp
         // (ou sem suporte a timings) não têm os nós; ficam "n/d", nunca "0".
         JsonNode timings = resp.path("timings");
         String promptMs = timings.has("prompt_ms") ? String.valueOf(timings.path("prompt_ms").asDouble()) : "n/d";
         String predictedMs = timings.has("predicted_ms") ? String.valueOf(timings.path("predicted_ms").asDouble()) : "n/d";
-        log.info("chat route={} model={} status={} latencyMs={} promptTokens={} completionTokens={} cachedTokens={} cost={} promptMs={} predictedMs={}",
+        log.info("chat route={} model={} status={} latencyMs={} promptTokens={} completionTokens={} cachedTokens={} cost={} promptMs={} predictedMs={}{}",
                 target, request.path("model").asText("?"), status, latencyMs,
                 tokens(usage, "prompt_tokens"), tokens(usage, "completion_tokens"),
-                cachedTokens(usage), cost(usage), promptMs, predictedMs);
+                cachedTokens(usage), cost(usage), promptMs, predictedMs, taskSuffix(task));
     }
 
     /** Stream summary; {@code chunk} é o último evento {@code data:} cujo {@code usage} é objeto (ou null). */
-    void streamSummary(String target, ObjectNode request, JsonNode chunk, int status, long latencyMs, String outcome) {
+    void streamSummary(String target, ObjectNode request, JsonNode chunk, int status, long latencyMs, String outcome,
+            LlmTask task) {
         JsonNode last = chunk == null ? MissingNode.getInstance() : chunk;
         JsonNode usage = last.path("usage");
         if (Router.OPENROUTER.equals(target) && last.has("provider")) {
@@ -88,10 +91,15 @@ class RequestLogger {
             log.info("openrouter model={} provider={} (stream)", request.path("model").asText("?"),
                     last.path("provider").asText("?"));
         }
-        log.info("chat route={} model={} status={} latencyMs={} promptTokens={} completionTokens={} cachedTokens={} cost={} outcome={} (stream)",
+        log.info("chat route={} model={} status={} latencyMs={} promptTokens={} completionTokens={} cachedTokens={} cost={} outcome={}{} (stream)",
                 target, request.path("model").asText("?"), status, latencyMs,
                 tokens(usage, "prompt_tokens"), tokens(usage, "completion_tokens"),
-                cachedTokens(usage), cost(usage), outcome);
+                cachedTokens(usage), cost(usage), outcome, taskSuffix(task));
+    }
+
+    /** {@code " task=ipe-summary"} só quando o chamador declarou tarefa; sem tarefa a linha fica como era. */
+    private static String taskSuffix(LlmTask task) {
+        return task == null ? "" : " task=" + task.wireName();
     }
 
     private static String tokens(JsonNode usage, String field) {

@@ -11,6 +11,7 @@ import dev.giovane.llmproxy.api.InvalidRequestException;
 import dev.giovane.llmproxy.config.LlmConfigState;
 import dev.giovane.llmproxy.config.ProxyProperties;
 import dev.giovane.llmproxy.router.Router;
+import dev.giovane.llmproxy.task.LlmTask;
 import dev.giovane.llmproxy.upstream.UpstreamFailure;
 
 import org.springframework.core.io.ClassPathResource;
@@ -77,6 +78,12 @@ public class ProxyService {
     // StreamingResponseBody that just writes those same bytes once, so both branches share one
     // concrete, resolvable return type.
     public ResponseEntity<StreamingResponseBody> completions(String body, String route, String priority) throws Exception {
+        return completions(body, route, priority, null);
+    }
+
+    public ResponseEntity<StreamingResponseBody> completions(String body, String route, String priority,
+            String taskHeader) throws Exception {
+        LlmTask task = LlmTask.parse(taskHeader);
         ObjectNode json = parseRequestObject(body);
 
         // Before routing: the guardrail adds real tokens to the prompt, and the auto-route
@@ -93,7 +100,7 @@ public class ProxyService {
         // Fill in the backend's default model when the caller didn't pin one — the whole point
         // of "auto" is that the caller doesn't know which backend (and thus which model id) runs.
         fillDefaultModel(json, up);
-        customizer.customize(json, target, up);
+        customizer.customize(json, target, up, task);
         String payload = mapper.writeValueAsString(json);
 
         // stream:true bypasses forward() entirely — that method fully buffers the upstream body
@@ -103,7 +110,7 @@ public class ProxyService {
         // full generation time, long enough to trip idle-timeout watchdogs downstream that assume
         // tokens arrive incrementally. See SseRelay for the real passthrough.
         if (json.path("stream").asBoolean(false)) {
-            return sseRelay.forward(up, "/v1/chat/completions", payload, target, json);
+            return sseRelay.forward(up, "/v1/chat/completions", payload, target, json, task);
         }
 
         long startedAt = System.currentTimeMillis();
@@ -117,7 +124,7 @@ public class ProxyService {
         } else {
             requestLog.draftAcceptance(json, resp);
         }
-        requestLog.requestSummary(target, json, resp, response.getStatusCode().value(), latencyMs);
+        requestLog.requestSummary(target, json, resp, response.getStatusCode().value(), latencyMs, task);
 
         StreamingResponseBody wrapped = out -> {
             if (response.getBody() != null) {

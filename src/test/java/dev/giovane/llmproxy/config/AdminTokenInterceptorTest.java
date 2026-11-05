@@ -73,7 +73,7 @@ class AdminTokenInterceptorTest {
     @Test
     void chatCompletionsWorksWithoutAnyAdminHeader() throws Exception {
         StreamingResponseBody emptyBody = out -> { };
-        when(proxyService.completions(anyString(), anyString(), any())).thenReturn(ResponseEntity.ok(emptyBody));
+        when(proxyService.completions(anyString(), anyString(), any(), any())).thenReturn(ResponseEntity.ok(emptyBody));
 
         mockMvc.perform(post("/v1/chat/completions").header("X-Internal-Token", "test-internal-token")
                         .contentType(MediaType.APPLICATION_JSON)

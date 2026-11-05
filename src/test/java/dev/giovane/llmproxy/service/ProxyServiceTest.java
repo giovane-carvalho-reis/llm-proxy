@@ -50,6 +50,7 @@ class ProxyServiceTest {
     private final AtomicReference<JsonNode> lastProvider = new AtomicReference<>();
     private final AtomicReference<String> lastToolChoice = new AtomicReference<>();
     private final AtomicReference<JsonNode> lastBody = new AtomicReference<>();
+    private final AtomicReference<String> lastRawBody = new AtomicReference<>();
     private final ObjectMapper mapper = new ObjectMapper();
 
     @BeforeEach
@@ -58,7 +59,9 @@ class ProxyServiceTest {
         upstream.createContext("/v1/chat/completions", exchange -> {
             lastAuthHeader.set(exchange.getRequestHeaders().getFirst("Authorization"));
             lastPath.set(exchange.getRequestURI().getPath());
-            var body = mapper.readTree(exchange.getRequestBody());
+            String raw = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            lastRawBody.set(raw);
+            var body = mapper.readTree(raw);
             lastBody.set(body);
             lastModel.set(body.path("model").asText(null));
             lastTemperature.set(body.has("temperature") ? body.path("temperature").asText() : null);
@@ -1126,5 +1129,145 @@ class ProxyServiceTest {
         }
         assertThat(appender.list.stream().map(e -> e.getFormattedMessage()))
                 .anyMatch(m -> m.contains("promptTokens=n/d") && m.contains("completionTokens=n/d"));
+    }
+
+    // ---- X-Llm-Task: ipe-summary (SPEC-resumo-ipe-dedicado F1) ----
+
+    private static final String TASK_BODY =
+            "{\"messages\":[],\"temperature\":0.7,\"reasoning\":{\"effort\":\"low\"},"
+                    + "\"reasoning_effort\":\"low\",\"include_reasoning\":true}";
+
+    @Test
+    void ipeSummaryOnOpenRouterForcesTemperatureZeroAndReasoningDisabled() throws Exception {
+        ProxyService service = TestServices.proxy(props("env-key", "env-model"), new LlmConfigState(), mapper);
+
+        service.completions(TASK_BODY, "openrouter", null, "ipe-summary");
+
+        JsonNode sent = lastBody.get();
+        assertThat(sent.path("temperature").asDouble()).isEqualTo(0.0);
+        assertThat(sent.path("reasoning").path("enabled").asBoolean(true)).isFalse();
+        assertThat(sent.path("reasoning").has("effort")).isFalse();
+        assertThat(sent.has("reasoning_effort")).isFalse();
+        assertThat(sent.has("include_reasoning")).isFalse();
+    }
+
+    @Test
+    void ipeSummaryOnLlamaCppDisablesThinkingViaTemplateKwargs() throws Exception {
+        ProxyService service = TestServices.proxy(props("env-key", "env-model"), new LlmConfigState(), mapper);
+
+        service.completions("{\"messages\":[],\"temperature\":0.7,\"reasoning_effort\":\"low\","
+                + "\"chat_template_kwargs\":{\"x\":1}}", "llama-cpp", null, "ipe-summary");
+
+        JsonNode sent = lastBody.get();
+        assertThat(sent.path("temperature").asDouble()).isEqualTo(0.0);
+        assertThat(sent.path("chat_template_kwargs").path("enable_thinking").asBoolean(true)).isFalse();
+        assertThat(sent.path("chat_template_kwargs").path("x").asInt()).isEqualTo(1);
+        assertThat(sent.has("reasoning_effort")).isFalse();
+        assertThat(sent.has("reasoning")).isFalse();
+    }
+
+    @Test
+    void ipeSummaryStreamHasSamePayloadAsNonStream() throws Exception {
+        ProxyService service = TestServices.proxy(props("env-key", "env-model"), new LlmConfigState(), mapper);
+
+        service.completions(TASK_BODY.replace("{\"messages\"", "{\"stream\":true,\"messages\""), "openrouter", null,
+                "ipe-summary");
+
+        JsonNode sent = lastBody.get();
+        assertThat(sent.path("temperature").asDouble()).isEqualTo(0.0);
+        assertThat(sent.path("reasoning").path("enabled").asBoolean(true)).isFalse();
+        assertThat(sent.has("reasoning_effort")).isFalse();
+        assertThat(sent.has("include_reasoning")).isFalse();
+    }
+
+    @Test
+    void unknownTaskIsRejectedWithCodeAndNothingIsSent() {
+        ProxyService service = TestServices.proxy(props("env-key", "env-model"), new LlmConfigState(), mapper);
+
+        Assertions.assertThatThrownBy(() -> service.completions("{\"messages\":[]}", "openrouter", null, "xyz"))
+                .isInstanceOfSatisfying(InvalidRequestException.class,
+                        e -> assertThat(e.code()).isEqualTo("TAREFA_DESCONHECIDA"));
+        assertThat(lastBody.get()).isNull();
+    }
+
+    @Test
+    void absentOrBlankTaskLeavesPayloadIdenticalToNoHeader() throws Exception {
+        ProxyService service = TestServices.proxy(props("env-key", "env-model"), new LlmConfigState(), mapper);
+
+        service.completions(TASK_BODY, "openrouter", null);
+        JsonNode without = lastBody.get();
+        String withoutRaw = lastRawBody.get();
+        service.completions(TASK_BODY, "openrouter", null, null);
+        assertThat(lastRawBody.get()).isEqualTo(withoutRaw);
+        service.completions(TASK_BODY, "openrouter", null, " ");
+        assertThat(lastRawBody.get()).isEqualTo(withoutRaw);
+        assertThat(without.path("temperature").asDouble()).isEqualTo(0.7);
+        assertThat(without.path("reasoning").path("effort").asText()).isEqualTo("low");
+    }
+
+    @Test
+    void ipeSummaryKeepsReasoningDisabledEvenWithRequireParameters() throws Exception {
+        ProxyService service = TestServices.proxy(props("env-key", "env-model"), new LlmConfigState(), mapper);
+
+        service.completions("{\"messages\":[],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"x\"}}]}",
+                "openrouter", null, "ipe-summary");
+
+        JsonNode sent = lastBody.get();
+        assertThat(sent.path("provider").path("require_parameters").asBoolean(false)).isTrue();
+        assertThat(sent.path("reasoning").path("enabled").asBoolean(true)).isFalse();
+    }
+
+    @Test
+    void ipeSummaryOnModelThatRejectsTemperatureOmitsItButDisablesReasoning() throws Exception {
+        ProxyService service = TestServices.proxy(props("env-key", "env-model", 0.0), new LlmConfigState(), mapper);
+
+        service.completions("{\"model\":\"openai/gpt-6-luna\",\"messages\":[],\"temperature\":0.3}",
+                "openrouter", null, "ipe-summary");
+
+        assertThat(lastBody.get().has("temperature")).isFalse();
+        assertThat(lastBody.get().path("reasoning").path("enabled").asBoolean(true)).isFalse();
+    }
+
+    @Test
+    void ipeSummaryIsLoggedInStreamSummaryLine() throws Exception {
+        upstream.removeContext("/v1/chat/completions");
+        upstream.createContext("/v1/chat/completions", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            byte[] response = "data: {\"usage\":{\"prompt_tokens\":1}}\n\ndata: [DONE]\n\n".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("dev.giovane.llmproxy.service");
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            var response = TestServices.proxy(props("k", "m"), new LlmConfigState(), mapper)
+                    .completions("{\"messages\":[],\"stream\":true}", "openrouter", null, "ipe-summary");
+            response.getBody().writeTo(new ByteArrayOutputStream());
+        } finally {
+            logger.detachAppender(appender);
+        }
+        assertThat(appender.list.stream().map(e -> e.getFormattedMessage())
+                .filter(m -> m.startsWith("chat ") && m.endsWith("(stream)")))
+                .singleElement().satisfies(m -> assertThat(m).contains("task=ipe-summary"));
+    }
+
+    @Test
+    void ipeSummaryIsLoggedInSummaryLine() throws Exception {
+        var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("dev.giovane.llmproxy.service");
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            TestServices.proxy(props("k", "m"), new LlmConfigState(), mapper)
+                    .completions("{\"messages\":[]}", "openrouter", null, "ipe-summary");
+        } finally {
+            logger.detachAppender(appender);
+        }
+        assertThat(appender.list.stream().map(e -> e.getFormattedMessage()).filter(m -> m.startsWith("chat ")))
+                .singleElement().satisfies(m -> assertThat(m).contains("task=ipe-summary"));
     }
 }

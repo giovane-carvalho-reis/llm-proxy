@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import dev.giovane.llmproxy.config.ProxyProperties;
+import dev.giovane.llmproxy.task.LlmTask;
 import dev.giovane.llmproxy.upstream.UpstreamFailure;
 
 import org.slf4j.Logger;
@@ -47,7 +48,7 @@ class SseRelay {
     }
 
     ResponseEntity<StreamingResponseBody> forward(ProxyProperties.Upstream up, String path, String payload,
-            String target, ObjectNode request) {
+            String target, ObjectNode request, LlmTask task) {
         var spec = http.post(up, path);
         long startedAt = System.currentTimeMillis();
         try {
@@ -56,7 +57,7 @@ class SseRelay {
                     requestLog.upstreamErrorStatus(path, up.baseUrl(), res.getStatusCode().value(), null);
                 }
                 return ResponseEntity.status(res.getStatusCode()).headers(relayedHeaders(res))
-                        .body((StreamingResponseBody) out -> copy(res, out, target, request, startedAt));
+                        .body((StreamingResponseBody) out -> copy(res, out, target, request, startedAt, task));
             }, false);
         } catch (RestClientException e) {
             // SPEC-chat-backlog C.C2: a fase 2 do chat é stream — sem isto o alarme do Loki nunca via o backend caído.
@@ -90,7 +91,7 @@ class SseRelay {
     }
 
     private void copy(ClientHttpResponse res, OutputStream out, String target, ObjectNode request,
-            long startedAt) throws IOException {
+            long startedAt, LlmTask task) throws IOException {
         // SPEC-chat-backlog C.I3: só o último evento "data:" cujo usage é objeto (o resto do stream não fica
         // em memória); a linha é decodificada inteira, então multibyte cortado entre leituras não corrompe o JSON.
         StreamState st = new StreamState();
@@ -104,7 +105,7 @@ class SseRelay {
                     request.path("model").asText("?"), closeFailed);
         } finally {
             requestLog.streamSummary(target, request, st.usageChunk, res.getStatusCode().value(),
-                    System.currentTimeMillis() - startedAt, st.outcome);
+                    System.currentTimeMillis() - startedAt, st.outcome, task);
         }
     }
 
